@@ -1,0 +1,416 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AiConfidence, ReviewItemKind, WorkItemRow } from "@/lib/supabase/types";
+import type { AIProvider, EmailThreadResult } from "@/lib/ai";
+import type { NormalizedMessage, NormalizedThread } from "./types";
+import { applyRuleFilter } from "./ruleFilter";
+import { findDuplicateCandidates, findWorkItemByThreadId } from "./workItemMatch";
+import { decideAction, type ActionPlan, type ResolvedClassification } from "./decisionEngine";
+import { resolveDatePhrase } from "@/lib/dates/resolveDatePhrase";
+import { findBestMatch } from "@/lib/workItems/match";
+import { createCompany, createContact, createContext, listCompanies, listContacts, listContexts } from "@/lib/workItems/entities";
+
+type DB = SupabaseClient;
+
+export interface ThreadSyncLogEntry {
+  threadId: string;
+  subject: string;
+  ruleFilterSkipped: boolean;
+  ruleFilterReason: string | null;
+  llmCalled: boolean;
+  classification: string | null;
+  confidence: string | null;
+  action: string;
+}
+
+export interface ApplySyncDeps {
+  supabase: DB;
+  aiProvider: AIProvider;
+  todayISO: string;
+  /** Safe Bootstrap Mode (google_connection.safe_mode): mientras esta en true, nada se
+   * auto-crea ni auto-actualiza — todo lo que hubiera sido CREATE_WORK_ITEM o
+   * UPDATE_WORK_ITEM_SAFE pasa a Review, y se deja constancia de que accion se habria
+   * tomado (log.action = "WOULD_CREATE"/"WOULD_UPDATE"). RECEIVED_CHECK ya iba siempre a
+   * Review, asi que no cambia. */
+  safeMode: boolean;
+}
+
+/**
+ * Aplica Safe Bootstrap Mode sobre el plan ya decidido por decideAction(): en safe mode,
+ * lo que hubiera creado/actualizado un Work Item solo pasa a Review, dejando constancia de
+ * que accion se habria tomado. Pura y sin dependencias — decideAction() sigue sin saber
+ * nada de safe mode, esta funcion es la unica que remapea su resultado.
+ */
+export function applySafeMode(plan: ActionPlan, safeMode: boolean): { plan: ActionPlan; actionLabel: string } {
+  if (safeMode && plan.type === "CREATE_WORK_ITEM") {
+    return { plan: { type: "REVIEW_NEW_WORK_ITEM" }, actionLabel: "WOULD_CREATE (safe mode)" };
+  }
+  if (safeMode && plan.type === "UPDATE_WORK_ITEM_SAFE") {
+    return {
+      plan: { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: plan.workItemId },
+      actionLabel: "WOULD_UPDATE (safe mode)",
+    };
+  }
+  return { plan, actionLabel: plan.type };
+}
+
+/** Procesa UN thread de punta a punta: rule filter -> normalizer -> matching -> decision -> DB. */
+export async function processThread(deps: ApplySyncDeps, thread: NormalizedThread): Promise<ThreadSyncLogEntry> {
+  const log: ThreadSyncLogEntry = {
+    threadId: thread.threadId,
+    subject: thread.subject,
+    ruleFilterSkipped: false,
+    ruleFilterReason: null,
+    llmCalled: false,
+    classification: null,
+    confidence: null,
+    action: "",
+  };
+
+  const ruleResult = applyRuleFilter(thread);
+  if (ruleResult.skip) {
+    log.ruleFilterSkipped = true;
+    log.ruleFilterReason = ruleResult.reason;
+    log.action = "IGNORE (rule filter)";
+    return log;
+  }
+
+  const existingWorkItem = await findWorkItemByThreadId(deps.supabase, thread.threadId);
+
+  log.llmCalled = true;
+  const raw = await deps.aiProvider.normalizeEmailThread({
+    thread,
+    existingWorkItem: existingWorkItem
+      ? {
+          id: existingWorkItem.id,
+          title: existingWorkItem.title,
+          status: existingWorkItem.status,
+          next_action: existingWorkItem.next_action,
+          waiting_for_what: existingWorkItem.waiting_for_what,
+          expected_date: existingWorkItem.expected_date,
+          due_date: existingWorkItem.due_date,
+          committed_date: existingWorkItem.committed_date,
+        }
+      : null,
+    currentDateISO: deps.todayISO,
+  });
+
+  log.classification = raw.classification;
+  log.confidence = raw.confidence;
+
+  const resolved: ResolvedClassification = {
+    classification: raw.classification,
+    next_action: raw.next_action,
+    waiting_for_what: raw.waiting_for_what,
+    due_date: resolveDatePhrase(raw.due_date_phrase, deps.todayISO),
+    expected_date: resolveDatePhrase(raw.expected_date_phrase, deps.todayISO),
+    committed_date: resolveDatePhrase(raw.committed_date_phrase, deps.todayISO),
+    confidence: raw.confidence,
+  };
+
+  const latestMessage = thread.messages[thread.messages.length - 1];
+  const lastMessageIsOutbound = latestMessage?.direction === "OUTBOUND";
+
+  const referenceActivity = existingWorkItem?.last_activity_at ?? null;
+  const hasNewInboundSinceLastSync = thread.messages.some(
+    (m) => m.direction === "INBOUND" && (!referenceActivity || m.date > referenceActivity)
+  );
+
+  let duplicateCandidateIds: string[] = [];
+  if (!existingWorkItem) {
+    const [companies, contacts, contexts] = await Promise.all([
+      listCompanies(deps.supabase),
+      listContacts(deps.supabase),
+      listContexts(deps.supabase),
+    ]);
+    const companyMatch = findBestMatch(companies, raw.suggested_company);
+    const contactMatch = findBestMatch(contacts, raw.suggested_contact ?? raw.waiting_for_person);
+    const contextMatch = findBestMatch(contexts, raw.suggested_context);
+
+    const candidates = await findDuplicateCandidates(deps.supabase, {
+      title: raw.suggested_context ?? thread.subject,
+      contactId: contactMatch?.id ?? null,
+      companyId: companyMatch?.id ?? null,
+      contextId: contextMatch?.id ?? null,
+    });
+    duplicateCandidateIds = candidates.map((c) => c.id);
+  }
+
+  const rawPlan = decideAction({
+    classification: resolved,
+    existingWorkItem,
+    duplicateCandidateIds,
+    hasNewInboundSinceLastSync,
+    lastMessageIsOutbound,
+  });
+
+  const { plan, actionLabel } = applySafeMode(rawPlan, deps.safeMode);
+  log.action = actionLabel;
+
+  switch (plan.type) {
+    case "IGNORE":
+      break;
+
+    case "RECEIVED_CHECK":
+      await upsertReviewItem(deps.supabase, {
+        kind: "RECEIVED_CHECK",
+        workItemId: plan.workItemId,
+        proposedPayload: { note: "Hubo actividad nueva en el thread. Revisa si resuelve lo que estabas esperando." },
+        confidence: raw.confidence,
+        rationale: raw.rationale,
+        evidence: raw.evidence,
+        thread,
+        latestMessage,
+      });
+      break;
+
+    case "CREATE_WORK_ITEM": {
+      const ids = await resolveOrCreateEntities(deps.supabase, raw);
+      const workItem = await createWorkItemFromGmail(deps.supabase, thread, raw, resolved, ids, latestMessage);
+      await createSourceLinkForThread(deps.supabase, workItem.id, thread, latestMessage);
+      break;
+    }
+
+    case "UPDATE_WORK_ITEM_SAFE": {
+      const patch: Record<string, unknown> = {
+        last_activity_at: new Date().toISOString(),
+        last_message_direction: latestMessage?.direction ?? null,
+        ai_summary: raw.summary,
+      };
+      for (const field of plan.fieldsToFill) {
+        patch[field] = resolved[field];
+      }
+      const { error } = await deps.supabase.from("work_item").update(patch).eq("id", plan.workItemId);
+      if (error) throw error;
+      await createSourceLinkForThread(deps.supabase, plan.workItemId, thread, latestMessage);
+      break;
+    }
+
+    case "REVIEW_NEW_WORK_ITEM":
+      await upsertReviewItem(deps.supabase, {
+        kind: "NEW_WORK_ITEM",
+        workItemId: null,
+        proposedPayload: buildProposedPayload(raw, resolved, thread),
+        confidence: raw.confidence,
+        rationale: raw.rationale,
+        evidence: raw.evidence,
+        thread,
+        latestMessage,
+      });
+      break;
+
+    case "REVIEW_UPDATE_WORK_ITEM":
+      await upsertReviewItem(deps.supabase, {
+        kind: "UPDATE_WORK_ITEM",
+        workItemId: plan.workItemId,
+        proposedPayload: buildProposedPayload(raw, resolved, thread),
+        confidence: raw.confidence,
+        rationale: raw.rationale,
+        evidence: raw.evidence,
+        thread,
+        latestMessage,
+      });
+      break;
+
+    case "REVIEW_POTENTIAL_COMMITMENT":
+      await upsertReviewItem(deps.supabase, {
+        kind: "POTENTIAL_COMMITMENT",
+        workItemId: null,
+        proposedPayload: buildProposedPayload(raw, resolved, thread),
+        confidence: raw.confidence,
+        rationale: raw.rationale,
+        evidence: raw.evidence,
+        thread,
+        latestMessage,
+      });
+      break;
+
+    case "REVIEW_POSSIBLE_DUPLICATE":
+      await upsertReviewItem(deps.supabase, {
+        kind: "POSSIBLE_DUPLICATE",
+        workItemId: null,
+        duplicateCandidateIds: plan.candidateIds,
+        proposedPayload: buildProposedPayload(raw, resolved, thread),
+        confidence: raw.confidence,
+        rationale: raw.rationale,
+        evidence: raw.evidence,
+        thread,
+        latestMessage,
+      });
+      break;
+  }
+
+  return log;
+}
+
+function buildProposedPayload(raw: EmailThreadResult, resolved: ResolvedClassification, thread: NormalizedThread) {
+  return {
+    title: raw.suggested_context || thread.subject,
+    next_action: resolved.next_action,
+    waiting_for_what: resolved.waiting_for_what,
+    waiting_for_person: raw.waiting_for_person,
+    due_date: resolved.due_date,
+    expected_date: resolved.expected_date,
+    committed_date: resolved.committed_date,
+    suggested_company: raw.suggested_company,
+    suggested_contact: raw.suggested_contact,
+    suggested_context: raw.suggested_context,
+    suggested_category: raw.suggested_category,
+    blocking: raw.blocking,
+    is_delegation: raw.is_delegation,
+    classification: raw.classification,
+  };
+}
+
+export interface EntitySuggestions {
+  suggested_company: string | null;
+  suggested_contact: string | null;
+  waiting_for_person: string | null;
+  suggested_context: string | null;
+}
+
+/**
+ * Resuelve nombres sugeridos (texto libre) a IDs de Company/Contact/Context existentes, o
+ * los crea si no hay match. Exportada para reusarse desde src/lib/workItems/reviewItems.ts:
+ * cuando el usuario ACEPTA/APLICA una sugerencia de Review, la creacion de entidades pasa
+ * por aca recien en ese momento — nunca antes, sin que un humano confirme (ver comentario
+ * en processThread: los caminos de REVIEW nunca crean Company/Contact/Context solos).
+ */
+export async function resolveOrCreateEntities(supabase: DB, raw: EntitySuggestions) {
+  const [companies, contacts, contexts] = await Promise.all([listCompanies(supabase), listContacts(supabase), listContexts(supabase)]);
+
+  let companyId: string | null = null;
+  if (raw.suggested_company) {
+    const match = findBestMatch(companies, raw.suggested_company);
+    companyId = match ? match.id : (await createCompany(supabase, { name: raw.suggested_company })).id;
+  }
+
+  const personCache = new Map<string, string>();
+  async function resolvePerson(name: string | null): Promise<string | null> {
+    if (!name) return null;
+    const key = name.trim().toLowerCase();
+    if (!key) return null;
+    if (personCache.has(key)) return personCache.get(key) as string;
+    const match = findBestMatch(contacts, name);
+    const id = match ? match.id : (await createContact(supabase, { name, company_id: companyId })).id;
+    personCache.set(key, id);
+    return id;
+  }
+
+  const contactId = await resolvePerson(raw.suggested_contact);
+  const waitingForContactId = await resolvePerson(raw.waiting_for_person);
+
+  let contextId: string | null = null;
+  if (raw.suggested_context) {
+    const match = findBestMatch(contexts, raw.suggested_context);
+    contextId = match ? match.id : (await createContext(supabase, { title: raw.suggested_context, company_id: companyId })).id;
+  }
+
+  return { companyId, contactId, waitingForContactId, contextId };
+}
+
+async function createWorkItemFromGmail(
+  supabase: DB,
+  thread: NormalizedThread,
+  raw: EmailThreadResult,
+  resolved: ResolvedClassification,
+  ids: { companyId: string | null; contactId: string | null; waitingForContactId: string | null; contextId: string | null },
+  latestMessage: NormalizedMessage | undefined
+): Promise<WorkItemRow> {
+  const title = raw.suggested_context || thread.subject || raw.summary.slice(0, 80);
+  const { data, error } = await supabase
+    .from("work_item")
+    .insert({
+      title,
+      context_id: ids.contextId,
+      company_id: ids.companyId,
+      contact_id: ids.contactId,
+      category: raw.suggested_category,
+      next_action: resolved.next_action,
+      waiting_for_what: resolved.waiting_for_what,
+      waiting_for_contact_id: ids.waitingForContactId,
+      due_date: resolved.due_date,
+      expected_date: resolved.expected_date,
+      committed_date: resolved.committed_date,
+      blocking: raw.blocking,
+      ai_summary: raw.summary,
+      ai_confidence: raw.confidence,
+      last_message_direction: latestMessage?.direction ?? null,
+      status: "OPEN",
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data as WorkItemRow;
+}
+
+async function createSourceLinkForThread(
+  supabase: DB,
+  workItemId: string,
+  thread: NormalizedThread,
+  latestMessage: NormalizedMessage | undefined
+): Promise<void> {
+  const { error } = await supabase.from("source_link").insert({
+    work_item_id: workItemId,
+    source_type: "GMAIL",
+    external_id: thread.threadId,
+    external_url: thread.webUrl,
+    raw_excerpt: (latestMessage?.bodyText || latestMessage?.snippet || "").slice(0, 500),
+    raw_metadata: { message_id: latestMessage?.id ?? null, subject: thread.subject },
+    direction: latestMessage?.direction ?? null,
+    occurred_at: latestMessage?.date ?? new Date().toISOString(),
+  });
+  if (error) throw error;
+}
+
+interface UpsertReviewItemParams {
+  kind: ReviewItemKind;
+  workItemId: string | null;
+  duplicateCandidateIds?: string[];
+  proposedPayload: Record<string, unknown>;
+  confidence: AiConfidence;
+  rationale: string | null;
+  evidence: string | null;
+  thread: NormalizedThread;
+  latestMessage: NormalizedMessage | undefined;
+}
+
+/** Si ya hay un review_item PENDING del mismo kind para el mismo thread, lo actualiza en vez
+ * de duplicarlo (puede pasar si el thread recibe varios mensajes nuevos antes de que el
+ * usuario revise la sugerencia anterior). */
+async function upsertReviewItem(supabase: DB, params: UpsertReviewItemParams): Promise<void> {
+  const fields = {
+    kind: params.kind,
+    work_item_id: params.workItemId,
+    duplicate_candidate_ids: params.duplicateCandidateIds ?? null,
+    proposed_payload: params.proposedPayload,
+    confidence: params.confidence,
+    rationale: params.rationale,
+    evidence: params.evidence,
+    source_type: "GMAIL" as const,
+    external_id: params.thread.threadId,
+    external_message_id: params.latestMessage?.id ?? null,
+    external_url: params.thread.webUrl,
+    raw_excerpt: (params.latestMessage?.bodyText || params.latestMessage?.snippet || "").slice(0, 500),
+    raw_metadata: { subject: params.thread.subject },
+    direction: params.latestMessage?.direction ?? null,
+    occurred_at: params.latestMessage?.date ?? new Date().toISOString(),
+  };
+
+  const { data: existing, error: findError } = await supabase
+    .from("review_item")
+    .select("id")
+    .eq("external_id", params.thread.threadId)
+    .eq("kind", params.kind)
+    .eq("status", "PENDING")
+    .maybeSingle();
+  if (findError) throw findError;
+
+  if (existing) {
+    const { error } = await supabase.from("review_item").update(fields).eq("id", existing.id);
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await supabase.from("review_item").insert(fields);
+  if (error) throw error;
+}

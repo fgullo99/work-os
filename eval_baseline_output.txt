@@ -1,0 +1,454 @@
+﻿
+> work-os@0.1.0 eval:normalizer
+> tsx scripts/eval-normalizer.ts
+
+Fecha de referencia (hoy, America/Argentina/Buenos_Aires): 2026-08-10
+AI_PROVIDER: anthropic
+
+=== Caso 1 ===
+INPUT: "Esperando planos de Carlos para el miercoles."
+EXPECTED BEHAVIOR: WAITING (waiting_for_what != null, expected_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Planos de Carlos",
+  "next_action": null,
+  "waiting_for_person": "Carlos",
+  "waiting_for_what": "Planos",
+  "due_date": null,
+  "expected_date": "2026-08-12",
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": "Carlos",
+  "suggested_context": null,
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Esperando que Carlos envie los planos, previsto para el miercoles."
+}
+RESULT: AUTO PASS
+
+=== Caso 2 ===
+INPUT: "Llamar a Juan manana por trafo 1600."
+EXPECTED BEHAVIOR: ACTION (next_action != null, due_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Trafo 1600 - Llamada a Juan",
+  "next_action": "Llamar a Juan",
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": "2026-08-11",
+  "expected_date": null,
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": "Juan",
+  "suggested_context": "Trafo 1600",
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "MEDIUM",
+  "summary": "Accion pendiente: llamar a Juan manana por el trafo 1600."
+}
+RESULT: AUTO PASS
+
+=== Caso 3 ===
+INPUT: "Enviar cotizacion de 2500 kVA a Techint antes del viernes."
+EXPECTED BEHAVIOR: ACTION + COMMITMENT (next_action != null, due_date != null, committed_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Techint - Cotizacion 2500 kVA",
+  "next_action": "Enviar cotizacion de 2500 kVA",
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": "2026-08-14",
+  "expected_date": null,
+  "committed_date": "2026-08-14",
+  "suggested_company": "Techint",
+  "suggested_contact": null,
+  "suggested_context": "Cotizacion 2500 kVA - Techint",
+  "suggested_category": "COMERCIAL",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Accion pendiente: enviar cotizacion de 2500 kVA a Techint, vence el viernes."
+}
+RESULT: AUTO PASS
+
+=== Caso 4 ===
+INPUT: "Estoy esperando que Nicolas revise el plano para manana."
+EXPECTED BEHAVIOR: WAITING (waiting_for_what != null, expected_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Revision de plano - Nicolas",
+  "next_action": null,
+  "waiting_for_person": "Nicolas",
+  "waiting_for_what": "Revision del plano",
+  "due_date": null,
+  "expected_date": "2026-08-11",
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": "Nicolas",
+  "suggested_context": null,
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Esperando que Nicolas revise el plano, previsto para manana."
+}
+RESULT: AUTO PASS
+
+=== Caso 5 ===
+INPUT: "Revisar precio mientras espero confirmacion de tension del cliente para el jueves."
+EXPECTED BEHAVIOR: ACTION + WAITING simultaneos (next_action != null, waiting_for_what != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Confirmacion de tension del cliente",
+  "next_action": "Revisar precio",
+  "waiting_for_person": null,
+  "waiting_for_what": "Confirmacion de tension del cliente",
+  "due_date": null,
+  "expected_date": "2026-08-13",
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": null,
+  "suggested_context": null,
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Accion pendiente: revisar precio, mientras se espera confirmacion de tension del cliente para el jueves."
+}
+RESULT: AUTO PASS
+
+=== Caso 6 ===
+INPUT: "Recordarme la semana que viene revisar la oferta de ABB."
+EXPECTED BEHAVIOR: ACTION (next_action != null, due_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "ABB - Revision de oferta",
+  "next_action": "Revisar la oferta de ABB",
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": "2026-08-17",
+  "expected_date": null,
+  "committed_date": null,
+  "suggested_company": "ABB",
+  "suggested_contact": null,
+  "suggested_context": "ABB - Oferta",
+  "suggested_category": "COMERCIAL",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Accion pendiente: revisar la oferta de ABB, programado para la semana que viene."
+}
+RESULT: AUTO PASS
+
+=== Caso 7 ===
+INPUT: "Los planos deberian llegar el viernes."
+EXPECTED BEHAVIOR: WAITING (waiting_for_what != null, expected_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Planos pendientes de llegada",
+  "next_action": null,
+  "waiting_for_person": null,
+  "waiting_for_what": "Planos",
+  "due_date": null,
+  "expected_date": "2026-08-14",
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": null,
+  "suggested_context": null,
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "MEDIUM",
+  "summary": "Esperando: planos, deberian llegar el viernes."
+}
+RESULT: AUTO PASS
+
+=== Caso 8 ===
+INPUT: "Delegue a Nicolas revisar el plano para el martes."
+EXPECTED BEHAVIOR: WAITING (waiting_for_what != null, expected_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Revision de plano - Nicolas",
+  "next_action": "Revisar el plano",
+  "waiting_for_person": "Nicolas",
+  "waiting_for_what": "Revision del plano",
+  "due_date": "2026-08-11",
+  "expected_date": "2026-08-11",
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": "Nicolas",
+  "suggested_context": "Revision de plano",
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Tarea delegada a Nicolas: revisar el plano, vence el martes."
+}
+RESULT: AUTO PASS
+
+=== Caso 9 ===
+INPUT: "Confirmar perdidas hoy. El cliente esta esperando."
+EXPECTED BEHAVIOR: ACTION (next_action != null, due_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Confirmacion de perdidas al cliente",
+  "next_action": "Confirmar perdidas",
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": "2026-08-10",
+  "expected_date": null,
+  "committed_date": "2026-08-10",
+  "suggested_company": null,
+  "suggested_contact": null,
+  "suggested_context": "Confirmacion de perdidas",
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "MEDIUM",
+  "summary": "Accion pendiente: confirmar perdidas hoy, el cliente esta a la espera de esta informacion."
+}
+RESULT: AUTO PASS
+
+=== Caso 10 ===
+INPUT: "Me llego el comprobante de pago."
+EXPECTED BEHAVIOR: INFO, sin accion inventada (next_action == null, waiting_for_what == null)
+OUTPUT STRUCTURED:
+{
+  "title": "Comprobante de pago recibido",
+  "next_action": null,
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": null,
+  "expected_date": null,
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": null,
+  "suggested_context": null,
+  "suggested_category": "ADMINISTRATIVO",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Informacion: comprobante de pago recibido."
+}
+RESULT: AUTO PASS
+
+=== Caso 11 ===
+INPUT: "Mandale manana a Techint la alternativa en cobre del transformador de 1600 kVA."
+EXPECTED BEHAVIOR: ACTION (next_action != null, due_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Techint - Alternativa cobre transformador 1600 kVA",
+  "next_action": "Enviar alternativa en cobre del transformador de 1600 kVA",
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": "2026-08-11",
+  "expected_date": null,
+  "committed_date": "2026-08-11",
+  "suggested_company": "Techint",
+  "suggested_contact": null,
+  "suggested_context": "Transformador 1600 kVA - alternativa cobre",
+  "suggested_category": "COMERCIAL",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Accion pendiente: enviar a Techint la alternativa en cobre del transformador de 1600 kVA, comprometido para manana."
+}
+RESULT: AUTO PASS
+
+=== Caso 12 ===
+INPUT: "Le pedi a Carolina que confirme el flete antes del jueves."
+EXPECTED BEHAVIOR: WAITING (waiting_for_what != null, expected_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Confirmacion de flete",
+  "next_action": null,
+  "waiting_for_person": "Carolina",
+  "waiting_for_what": "Confirmacion del flete",
+  "due_date": null,
+  "expected_date": "2026-08-13",
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": "Carolina",
+  "suggested_context": null,
+  "suggested_category": "OPERACIONES",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Esperando que Carolina confirme el flete, vence el jueves."
+}
+RESULT: AUTO PASS
+
+=== Caso 13 ===
+INPUT: "Quedamos en enviar los planos aprobados el lunes."
+EXPECTED BEHAVIOR: ACTION (next_action != null, due_date != null) — compromiso propio
+OUTPUT STRUCTURED:
+{
+  "title": "Envio de planos aprobados",
+  "next_action": "Enviar planos aprobados",
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": "2026-08-17",
+  "expected_date": null,
+  "committed_date": "2026-08-17",
+  "suggested_company": null,
+  "suggested_contact": null,
+  "suggested_context": "Planos aprobados",
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "MEDIUM",
+  "summary": "Compromiso: enviar los planos aprobados el lunes."
+}
+RESULT: AUTO PASS
+
+=== Caso 14 ===
+INPUT: "El proveedor dijo que pasa precio la semana que viene."
+EXPECTED BEHAVIOR: WAITING (waiting_for_what != null, expected_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "Proveedor - Precio pendiente",
+  "next_action": null,
+  "waiting_for_person": "El proveedor",
+  "waiting_for_what": "Precio",
+  "due_date": null,
+  "expected_date": "2026-08-17",
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": null,
+  "suggested_context": null,
+  "suggested_category": "COMERCIAL",
+  "blocking": false,
+  "confidence": "MEDIUM",
+  "summary": "En espera: el proveedor pasa el precio, previsto para la semana que viene."
+}
+RESULT: AUTO PASS
+
+=== Caso 15 ===
+INPUT: "Revisar las perdidas del trafo de 1250 kVA, pero antes necesito que Nicolas me confirme el diseno."
+EXPECTED BEHAVIOR: ACTION + WAITING simultaneos (next_action != null, waiting_for_what != null) — caso critico, igual que el 5
+OUTPUT STRUCTURED:
+{
+  "title": "Trafo 1250 kVA - Revision de perdidas",
+  "next_action": "Revisar perdidas del trafo de 1250 kVA",
+  "waiting_for_person": "Nicolas",
+  "waiting_for_what": "Confirmacion del diseno",
+  "due_date": null,
+  "expected_date": null,
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": "Nicolas",
+  "suggested_context": "Trafo 1250 kVA - perdidas",
+  "suggested_category": "TECNICO",
+  "blocking": true,
+  "confidence": "HIGH",
+  "summary": "Accion pendiente: revisar perdidas del trafo de 1250 kVA, bloqueada hasta que Nicolas confirme el diseno."
+}
+RESULT: AUTO PASS
+
+=== Caso 16 ===
+INPUT: "Ya envie la cotizacion a ABB. Hacer seguimiento si no contestan para el viernes."
+EXPECTED BEHAVIOR: ACTION de seguimiento (next_action != null, due_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "ABB - Seguimiento cotizacion",
+  "next_action": "Hacer seguimiento de la cotizacion si no contestan",
+  "waiting_for_person": null,
+  "waiting_for_what": "Respuesta de ABB a la cotizacion",
+  "due_date": "2026-08-14",
+  "expected_date": "2026-08-14",
+  "committed_date": null,
+  "suggested_company": "ABB",
+  "suggested_contact": null,
+  "suggested_context": "ABB - Cotizacion",
+  "suggested_category": "COMERCIAL",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Cotizacion enviada a ABB; se debe hacer seguimiento si no responden para el viernes."
+}
+RESULT: AUTO PASS
+
+=== Caso 17 ===
+INPUT: "Cliente aprobo los planos. No tengo nada que hacer con esto por ahora."
+EXPECTED BEHAVIOR: INFO explicito, sin accion inventada (next_action == null, waiting_for_what == null)
+OUTPUT STRUCTURED:
+{
+  "title": "Planos aprobados por cliente",
+  "next_action": null,
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": null,
+  "expected_date": null,
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": null,
+  "suggested_context": "Aprobacion de planos",
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Informacion: el cliente aprobo los planos, sin accion pendiente."
+}
+RESULT: AUTO PASS
+
+=== Caso 18 ===
+INPUT: "Recordame reclamarle a MBT el protocolo de ensayo pasado manana."
+EXPECTED BEHAVIOR: ACTION (next_action != null, due_date != null)
+OUTPUT STRUCTURED:
+{
+  "title": "MBT - Protocolo de ensayo",
+  "next_action": "Reclamar a MBT el protocolo de ensayo",
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": "2026-08-12",
+  "expected_date": null,
+  "committed_date": null,
+  "suggested_company": "MBT",
+  "suggested_contact": null,
+  "suggested_context": "MBT - Protocolo de ensayo",
+  "suggested_category": "TECNICO",
+  "blocking": false,
+  "confidence": "HIGH",
+  "summary": "Accion pendiente: reclamar a MBT el protocolo de ensayo, pasado manana."
+}
+RESULT: AUTO PASS
+
+=== Caso 19 ===
+INPUT: "Carolina esta esperando que le confirme si liberamos el pedido."
+EXPECTED BEHAVIOR: ACTION del usuario, NO waiting_for (next_action != null, waiting_for_what == null) — prueba de direccion: Carolina espera de MI, yo no espero de Carolina
+OUTPUT STRUCTURED:
+{
+  "title": "Confirmar liberacion de pedido a Carolina",
+  "next_action": "Confirmar a Carolina si se libera el pedido",
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": null,
+  "expected_date": null,
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": "Carolina",
+  "suggested_context": null,
+  "suggested_category": "OPERACIONES",
+  "blocking": false,
+  "confidence": "MEDIUM",
+  "summary": "Accion pendiente: confirmar a Carolina si se libera el pedido, sin fecha limite indicada."
+}
+RESULT: AUTO PASS
+
+=== Caso 20 ===
+INPUT: "Nos confirmaron fecha de entrega para el 15 de septiembre."
+EXPECTED BEHAVIOR: INFO, sin accion inventada (next_action == null, waiting_for_what == null)
+OUTPUT STRUCTURED:
+{
+  "title": "Confirmacion de fecha de entrega",
+  "next_action": null,
+  "waiting_for_person": null,
+  "waiting_for_what": null,
+  "due_date": null,
+  "expected_date": null,
+  "committed_date": null,
+  "suggested_company": null,
+  "suggested_contact": null,
+  "suggested_context": null,
+  "suggested_category": "OPERACIONES",
+  "blocking": false,
+  "confidence": "MEDIUM",
+  "summary": "Informacion: se confirmo la fecha de entrega para el 15 de septiembre."
+}
+RESULT: AUTO PASS
+
+=== RESUMEN ===
+TOTAL: 20
+AUTO PASS: 20
+REVIEW REQUIRED: 0
+FAILED STRUCTURE: 0
+
+Esto es un smoke test, no una metrica de precision/recall. AUTO PASS confirma solo que los campos esperados quedaron null/no-null como corresponde — revisar igual el OUTPUT STRUCTURED de cada caso a ojo antes de confiar en la calidad de la interpretacion.
