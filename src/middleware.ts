@@ -14,7 +14,17 @@ const PUBLIC_PATH_PREFIXES = ["/login", "/auth"];
 const SELF_AUTH_PATHS = ["/api/gmail/sync", "/api/capture/whatsapp", "/api/capture/zapia"];
 
 export async function middleware(request: NextRequest) {
-  const { response, user } = await updateSession(request);
+  let response: NextResponse;
+  let user: Awaited<ReturnType<typeof updateSession>>["user"];
+  try {
+    ({ response, user } = await updateSession(request));
+  } catch (err) {
+    // Diagnostico temporal: exponer el error real en vez de un 500 opaco.
+    return NextResponse.json(
+      { diagnostic: true, message: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : null },
+      { status: 500 }
+    );
+  }
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATH_PREFIXES.some((p) => path.startsWith(p)) || SELF_AUTH_PATHS.some((p) => path.startsWith(p));
 
