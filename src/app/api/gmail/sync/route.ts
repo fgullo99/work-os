@@ -9,7 +9,7 @@ import { getConnectionOrThrow, runIncrementalSync } from "@/lib/gmail/sync";
  * que si tiene sesion normal. src/middleware.ts exime esta ruta puntual del gate de sesion
  * generico — el chequeo de autorizacion pasa a vivir aca adentro.
  */
-export async function POST(request: Request) {
+async function handler(request: Request) {
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
   const hasValidCronAuth = Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
@@ -36,3 +36,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "sync_failed" }, { status: 500 });
   }
 }
+
+// Vercel Cron Jobs disparan con GET (no POST) y agregan automaticamente
+// "Authorization: Bearer $CRON_SECRET" cuando ese env var existe en el proyecto — mismo
+// handler, misma auth interna, no hace falta duplicar nada.
+export const POST = handler;
+export const GET = handler;
