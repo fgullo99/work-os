@@ -14,6 +14,20 @@ const PUBLIC_PATH_PREFIXES = ["/login", "/auth"];
 const SELF_AUTH_PATHS = ["/api/gmail/sync", "/api/capture/whatsapp", "/api/capture/zapia"];
 
 export async function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname === "/__diag") {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    return NextResponse.json({
+      urlPresent: Boolean(url),
+      urlLength: url?.length ?? 0,
+      urlPreview: url ? url.slice(0, 20) : null,
+      keyPresent: Boolean(key),
+      keyLength: key?.length ?? 0,
+      allPublicEnvKeys: Object.keys(process.env).filter((k) => k.startsWith("NEXT_PUBLIC_")),
+      vercelEnv: process.env.VERCEL_ENV ?? null,
+    });
+  }
+
   let response: NextResponse;
   let user: Awaited<ReturnType<typeof updateSession>>["user"];
   try {
