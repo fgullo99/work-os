@@ -21,5 +21,12 @@ export async function GET() {
     const value = process.env[name];
     report[name] = { present: Boolean(value), length: value?.length ?? 0 };
   }
-  return NextResponse.json(report);
+  const allEnvKeys = Object.keys(process.env).sort();
+  return NextResponse.json({
+    report,
+    totalEnvKeys: allEnvKeys.length,
+    keysContainingOurNames: allEnvKeys.filter((k) => names.includes(k)),
+    vercelEnv: process.env.VERCEL_ENV ?? null,
+    nodeEnv: process.env.NODE_ENV ?? null,
+  });
 }
