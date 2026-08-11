@@ -3,6 +3,12 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { getConnectionOrThrow, runIncrementalSync } from "@/lib/gmail/sync";
 
+// Tope maximo permitido por Vercel para este endpoint. El sync procesa threads en
+// serie con una llamada real a Anthropic por thread, asi que puede tardar mas que el
+// limite default de la funcion serverless (10s) — sobre todo la primera vez que hay
+// un backlog grande pendiente de procesar.
+export const maxDuration = 60;
+
 /**
  * Dual-auth a proposito: esta ruta la puede llamar (a) un cron externo, que no tiene
  * cookies de sesion (autentica con CRON_SECRET), o (b) el boton "Sync now" de Settings,
