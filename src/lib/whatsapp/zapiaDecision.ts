@@ -5,6 +5,7 @@ export type ZapiaRelevance = "WORK" | "PERSONAL" | "UNCERTAIN";
 
 export type ZapiaActionPlan =
   | { type: "IGNORE"; reason: string }
+  | { type: "RECEIVED_CHECK"; workItemId: string }
   | { type: "REVIEW_NEW_WORK_ITEM" }
   | { type: "REVIEW_UPDATE_WORK_ITEM"; workItemId: string }
   | { type: "REVIEW_POSSIBLE_DUPLICATE"; candidateIds: string[] }
@@ -19,6 +20,10 @@ export interface ZapiaDecisionInput {
   /** Matches heuristicos por contacto/empresa/context + similaridad de titulo — pueden
    * incluir Work Items de OTRAS fuentes (ej. Gmail), a proposito (seccion 8 del spec). */
   duplicateCandidateIds: string[];
+  /** Este batch trae al menos un mensaje inbound (equivalente WhatsApp de "hasNewInboundSinceLastSync"
+   * de Gmail — acá no hace falta comparar fechas: la idempotencia por idempotencyKey ya
+   * garantiza que un batch que llega hasta el decision engine es contenido nuevo). */
+  hasNewInboundMessage: boolean;
 }
 
 /**
@@ -32,6 +37,13 @@ export interface ZapiaDecisionInput {
 export function decideZapiaAction(input: ZapiaDecisionInput): ZapiaActionPlan {
   if (input.relevance === "PERSONAL") {
     return { type: "IGNORE", reason: "relevance=PERSONAL" };
+  }
+
+  // Misma prioridad absoluta que Gmail (decisionEngine.ts): un Work Item WAITING que recibe
+  // un mensaje inbound nuevo nunca se cierra ni se reclasifica solo — siempre a revisar,
+  // sin importar classification/confidence de este batch.
+  if (input.existingWorkItem?.waiting_for_what && input.hasNewInboundMessage) {
+    return { type: "RECEIVED_CHECK", workItemId: input.existingWorkItem.id };
   }
 
   if (input.classification === "IGNORE") {

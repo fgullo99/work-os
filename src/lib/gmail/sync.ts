@@ -30,7 +30,7 @@ export interface SyncSummary {
   log: ThreadSyncLogEntry[];
 }
 
-function getUserAddresses(): string[] {
+export function getUserAddresses(): string[] {
   const raw = process.env.USER_EMAIL_ADDRESSES ?? "";
   return raw
     .split(",")
@@ -71,6 +71,7 @@ async function processThreadIds(
         relevance: null,
         classification: null,
         confidence: null,
+        isDelegation: null,
         action: "ERROR",
       });
     }

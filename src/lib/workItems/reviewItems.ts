@@ -26,6 +26,22 @@ export async function ignoreReviewItem(supabase: DB, id: string): Promise<void> 
   if (error) throw error;
 }
 
+/** Feedback loop (WRONG/NOT_IMPORTANT/PERSONAL, seccion 30 del pedido): guarda la señal en
+ * review_item.feedback (columna que ya existia sin usar) y marca el item IGNORED — la
+ * sugerencia era incorrecta, no tiene sentido dejarla pendiente en Review. No reentrena nada,
+ * solo queda la señal acumulada para uso futuro. */
+export async function setReviewFeedback(
+  supabase: DB,
+  id: string,
+  feedback: "CORRECT" | "WRONG" | "NOT_IMPORTANT" | "PERSONAL"
+): Promise<void> {
+  const { error } = await supabase
+    .from("review_item")
+    .update({ feedback, status: "IGNORED", resolved_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+
 async function createSourceLinkFromReviewItem(supabase: DB, workItemId: string, reviewItem: ReviewItemRow): Promise<void> {
   const { error } = await supabase.from("source_link").insert({
     work_item_id: workItemId,

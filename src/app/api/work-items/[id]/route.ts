@@ -5,12 +5,18 @@ import { getWorkItem, getWorkItemNotes, getWorkItemSources, updateWorkItem } fro
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
   const supabase = createSupabaseServerClient();
   try {
-    const [workItem, sources, notes] = await Promise.all([
+    const [workItem, sources, notes, aiActionsRes] = await Promise.all([
       getWorkItem(supabase, params.id),
       getWorkItemSources(supabase, params.id),
       getWorkItemNotes(supabase, params.id),
+      supabase
+        .from("ai_action_log")
+        .select("id, source_type, action, confidence, reasoning, changed_fields, created_at, undone_at")
+        .eq("work_item_id", params.id)
+        .order("created_at", { ascending: false })
+        .limit(5),
     ]);
-    return NextResponse.json({ ok: true, workItem, sources, notes });
+    return NextResponse.json({ ok: true, workItem, sources, notes, aiActions: aiActionsRes.data ?? [] });
   } catch (err) {
     return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
   }

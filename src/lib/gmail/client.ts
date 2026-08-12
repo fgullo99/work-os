@@ -76,6 +76,14 @@ export async function getThread(gmail: gmail_v1.Gmail, threadId: string): Promis
   return res.data;
 }
 
+/** Fingerprint barato de un thread (su historyId), SIN traer los mensajes completos — usado
+ * por el AI Work Manager para saber si vale la pena re-analizar con IA (ver
+ * src/lib/gmail/reconcile.ts) antes de pagar una llamada cara con format:"full". */
+export async function getThreadVersion(gmail: gmail_v1.Gmail, threadId: string): Promise<string | null> {
+  const res = await gmail.users.threads.get({ userId: "me", id: threadId, format: "minimal" });
+  return res.data.historyId ?? null;
+}
+
 export async function getCurrentHistoryId(gmail: gmail_v1.Gmail): Promise<string | null> {
   const res = await gmail.users.getProfile({ userId: "me" });
   return res.data.historyId ?? null;

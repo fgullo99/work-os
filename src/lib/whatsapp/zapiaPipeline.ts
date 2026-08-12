@@ -75,6 +75,56 @@ function buildRawExcerpt(unit: ZapiaConversationUnit): string {
   return (last?.text ?? "").slice(0, 500);
 }
 
+/** Equivalente WhatsApp de upsertReviewItem(kind:"RECEIVED_CHECK") en applySync.ts. Dedupea
+ * por chat_id+kind+status=PENDING igual que Gmail dedupea por thread_id — si Zapia empuja
+ * varios batches inbound seguidos sobre el mismo chat en WAITING, actualiza el mismo
+ * review_item en vez de acumular uno por batch. */
+async function upsertReceivedCheckReviewItem(
+  supabase: DB,
+  params: {
+    workItemId: string;
+    chatId: string | null;
+    confidence: string;
+    rationale: string;
+    evidence: string | null;
+    unit: ZapiaConversationUnit;
+  }
+): Promise<string> {
+  const fields = {
+    kind: "RECEIVED_CHECK" as const,
+    work_item_id: params.workItemId,
+    duplicate_candidate_ids: null,
+    proposed_payload: { note: "Hubo actividad nueva en WhatsApp. Revisa si resuelve lo que estabas esperando." },
+    confidence: params.confidence,
+    rationale: params.rationale,
+    evidence: params.evidence,
+    source_type: "WHATSAPP" as const,
+    external_id: params.chatId,
+    raw_excerpt: buildRawExcerpt(params.unit),
+    raw_metadata: { provider: "zapia", batch_id: params.unit.batchId, chat_id: params.chatId },
+    occurred_at: params.unit.capturedAt ?? new Date().toISOString(),
+  };
+
+  const { data: existing, error: findError } = await supabase
+    .from("review_item")
+    .select("id")
+    .eq("external_id", params.chatId)
+    .eq("kind", "RECEIVED_CHECK")
+    .eq("status", "PENDING")
+    .maybeSingle();
+  if (findError) throw findError;
+
+  if (existing) {
+    const { error } = await supabase.from("review_item").update(fields).eq("id", existing.id);
+    if (error) throw error;
+    return (existing as { id: string }).id;
+  }
+
+  const { data, error } = await supabase.from("review_item").insert(fields).select("id").single();
+  if (error) throw error;
+  return (data as { id: string }).id;
+}
+
 /**
  * Procesa UNA conversacion de punta a punta: idempotencia -> matching -> Normalizer ->
  * decision (siempre Review, seccion 7 del spec) -> review_item. Nunca crea ni actualiza un
@@ -207,16 +257,38 @@ export async function processZapiaConversation(
           })
         : "REVIEW";
 
+    const hasNewInboundMessage = unit.messages.some((m) => m.direction === "inbound");
+
     const basePlan = decideZapiaAction({
       relevance: raw.relevance,
       classification: resolved,
       existingWorkItem,
       duplicateCandidateIds,
+      hasNewInboundMessage,
     });
     const plan = applyZapiaAutomationGate(basePlan, automationSettings.whatsapp_auto_enabled, {
       createEligible,
       updateDecision,
     });
+
+    if (plan.type === "RECEIVED_CHECK") {
+      const reviewItemId = await upsertReceivedCheckReviewItem(deps.supabase, {
+        workItemId: plan.workItemId,
+        chatId,
+        confidence: raw.confidence,
+        rationale: raw.summary,
+        evidence: raw.evidence,
+        unit,
+      });
+      log.reviewItemId = reviewItemId;
+      log.outcome = "review_created";
+      const { error: receivedUpdateError } = await deps.supabase
+        .from("whatsapp_ingestion")
+        .update({ status: "PROCESSED", review_item_id: reviewItemId, processed_at: new Date().toISOString() })
+        .eq("id", ingestionId);
+      if (receivedUpdateError) throw receivedUpdateError;
+      return log;
+    }
 
     if (plan.type === "IGNORE") {
       log.outcome = "ignored";

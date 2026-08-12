@@ -90,6 +90,16 @@ export async function updateLastSyncSummary(supabase: DB, connectionId: string, 
   if (error) throw error;
 }
 
+/** Ultimo resultado de runReconciliationSweep (AI Work Manager) — el Dashboard lo lee para
+ * el Morning Brief sin llamar a la IA en el render, mismo patron que last_sync_summary. */
+export async function updateLastReconciliationSummary(supabase: DB, connectionId: string, summary: Record<string, unknown>): Promise<void> {
+  const { error } = await supabase
+    .from("google_connection")
+    .update({ last_reconciliation_summary: summary, last_reconciled_at: new Date().toISOString() })
+    .eq("id", connectionId);
+  if (error) throw error;
+}
+
 /** El refresh_token dejo de ser valido (revocado, o el usuario cambio la password, etc).
  * `errorMessage` es SOLO para diagnostico humano — nunca debe incluir el token en si. */
 export async function markNeedsReconnect(supabase: DB, connectionId: string, errorMessage: string): Promise<void> {

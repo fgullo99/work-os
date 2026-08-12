@@ -22,7 +22,14 @@ export interface ThreadSyncLogEntry {
   relevance: string | null;
   classification: string | null;
   confidence: string | null;
+  isDelegation: boolean | null;
   action: string;
+  /** Solo se llena cuando processThread corre desde el AI Work Manager (reconciliacion o
+   * discovery, ver reconcile.ts) en vez del sync incremental normal — permite armar el
+   * reporte "previous state / AI interpretation / resulting state" sin tocar el pipeline. */
+  existingWorkItemId?: string | null;
+  resultingWorkItemId?: string | null;
+  rationale?: string | null;
 }
 
 export interface ApplySyncDeps {
@@ -94,6 +101,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     relevance: null,
     classification: null,
     confidence: null,
+    isDelegation: null,
     action: "",
   };
 
@@ -128,6 +136,9 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
   log.relevance = raw.relevance;
   log.classification = raw.classification;
   log.confidence = raw.confidence;
+  log.isDelegation = raw.is_delegation;
+  log.existingWorkItemId = existingWorkItem?.id ?? null;
+  log.rationale = raw.rationale;
 
   const resolved: ResolvedClassification = {
     relevance: raw.relevance,
@@ -202,6 +213,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
       break;
 
     case "RECEIVED_CHECK":
+      log.resultingWorkItemId = plan.workItemId;
       await upsertReviewItem(deps.supabase, {
         kind: "RECEIVED_CHECK",
         workItemId: plan.workItemId,
@@ -217,6 +229,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     case "CREATE_WORK_ITEM": {
       const ids = await resolveOrCreateEntities(deps.supabase, raw);
       const workItem = await createWorkItemFromGmail(deps.supabase, thread, raw, resolved, ids, latestMessage);
+      log.resultingWorkItemId = workItem.id;
       await createSourceLinkForThread(deps.supabase, workItem.id, thread, latestMessage);
       if (actionLabel === "AUTO_CREATE") {
         await logAiAction(deps.supabase, {
@@ -235,6 +248,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     }
 
     case "UPDATE_WORK_ITEM_SAFE": {
+      log.resultingWorkItemId = plan.workItemId;
       const patch: Record<string, unknown> = {
         last_activity_at: new Date().toISOString(),
         last_message_direction: latestMessage?.direction ?? null,
@@ -280,6 +294,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
       break;
 
     case "REVIEW_UPDATE_WORK_ITEM":
+      log.resultingWorkItemId = plan.workItemId;
       await upsertReviewItem(deps.supabase, {
         kind: "UPDATE_WORK_ITEM",
         workItemId: plan.workItemId,

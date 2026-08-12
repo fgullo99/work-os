@@ -2,6 +2,7 @@ import type { SupabaseServerClient } from "@/lib/supabase/server";
 import type { SourceType, WorkItemRow } from "@/lib/supabase/types";
 import { computePriority, type PriorityResult } from "@/lib/engine/priority";
 import { computeRisk, type RiskResult } from "@/lib/engine/risk";
+import { computeSweep, type SweepSummary } from "@/lib/engine/sweep";
 import { logCorrections, logCorrectionsOnUpdate } from "./correctionLog";
 import type { CreateWorkItemInput, WorkItemWithRelations } from "./types";
 
@@ -160,6 +161,7 @@ export interface DashboardData {
   atRiskItems: Array<WorkItemWithRelations & { risk: RiskResult; latestSource: LatestSourceInfo | null }>;
   waitingForItems: Array<WorkItemWithRelations & { latestSource: LatestSourceInfo | null }>;
   counts: { today: number; atRisk: number; waiting: number };
+  sweep: SweepSummary;
 }
 
 export async function getDashboardData(supabase: DB, todayISO: string): Promise<DashboardData> {
@@ -213,6 +215,7 @@ export async function getDashboardData(supabase: DB, todayISO: string): Promise<
     atRiskItems,
     waitingForItems,
     counts: { today: todayItems.length, atRisk: atRiskItems.length, waiting: waitingForItems.length },
+    sweep: computeSweep(items, todayISO),
   };
 }
 

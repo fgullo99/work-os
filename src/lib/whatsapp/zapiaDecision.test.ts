@@ -3,6 +3,7 @@ import { decideZapiaAction, applyZapiaAutomationGate } from "./zapiaDecision";
 import type { WorkItemRow } from "@/lib/supabase/types";
 
 const baseWorkItem = { id: "wi-1" } as WorkItemRow;
+const waitingWorkItem = { id: "wi-2", waiting_for_what: "Confirmacion del cliente" } as WorkItemRow;
 
 describe("decideZapiaAction", () => {
   it("ignores when relevance is PERSONAL, regardless of classification or matches", () => {
@@ -11,6 +12,7 @@ describe("decideZapiaAction", () => {
       classification: "ACTION",
       existingWorkItem: baseWorkItem,
       duplicateCandidateIds: ["x"],
+      hasNewInboundMessage: false,
     });
     expect(plan).toEqual({ type: "IGNORE", reason: "relevance=PERSONAL" });
   });
@@ -21,6 +23,7 @@ describe("decideZapiaAction", () => {
       classification: "IGNORE",
       existingWorkItem: baseWorkItem,
       duplicateCandidateIds: ["x"],
+      hasNewInboundMessage: false,
     });
     expect(plan).toEqual({ type: "IGNORE", reason: "classification=IGNORE" });
   });
@@ -31,6 +34,7 @@ describe("decideZapiaAction", () => {
       classification: "ACTION",
       existingWorkItem: baseWorkItem,
       duplicateCandidateIds: [],
+      hasNewInboundMessage: false,
     });
     expect(plan).toEqual({ type: "REVIEW_UPDATE_WORK_ITEM", workItemId: "wi-1" });
   });
@@ -41,6 +45,7 @@ describe("decideZapiaAction", () => {
       classification: "WAITING",
       existingWorkItem: null,
       duplicateCandidateIds: ["a", "b"],
+      hasNewInboundMessage: false,
     });
     expect(plan).toEqual({ type: "REVIEW_POSSIBLE_DUPLICATE", candidateIds: ["a", "b"] });
   });
@@ -51,6 +56,7 @@ describe("decideZapiaAction", () => {
       classification: "COMMITMENT",
       existingWorkItem: null,
       duplicateCandidateIds: [],
+      hasNewInboundMessage: false,
     });
     expect(plan).toEqual({ type: "REVIEW_NEW_WORK_ITEM" });
   });
@@ -58,9 +64,48 @@ describe("decideZapiaAction", () => {
   it("por si sola (sin el gate de automatizacion), nunca devuelve algo distinto de IGNORE o REVIEW_*", () => {
     const classifications = ["ACTION", "WAITING", "COMMITMENT", "INFO"] as const;
     for (const classification of classifications) {
-      const plan = decideZapiaAction({ relevance: "WORK", classification, existingWorkItem: null, duplicateCandidateIds: [] });
+      const plan = decideZapiaAction({
+        relevance: "WORK",
+        classification,
+        existingWorkItem: null,
+        duplicateCandidateIds: [],
+        hasNewInboundMessage: false,
+      });
       expect(plan.type).toBe("REVIEW_NEW_WORK_ITEM");
     }
+  });
+
+  it("existing WAITING + mensaje inbound nuevo -> RECEIVED_CHECK, tiene prioridad sobre todo lo demas", () => {
+    const plan = decideZapiaAction({
+      relevance: "WORK",
+      classification: "IGNORE",
+      existingWorkItem: waitingWorkItem,
+      duplicateCandidateIds: [],
+      hasNewInboundMessage: true,
+    });
+    expect(plan).toEqual({ type: "RECEIVED_CHECK", workItemId: "wi-2" });
+  });
+
+  it("existing sin waiting_for_what + inbound nuevo -> NO dispara RECEIVED_CHECK (nada que resolver)", () => {
+    const plan = decideZapiaAction({
+      relevance: "WORK",
+      classification: "ACTION",
+      existingWorkItem: baseWorkItem,
+      duplicateCandidateIds: [],
+      hasNewInboundMessage: true,
+    });
+    expect(plan.type).not.toBe("RECEIVED_CHECK");
+  });
+
+  it("existing WAITING sin mensaje inbound nuevo -> NO dispara RECEIVED_CHECK", () => {
+    const plan = decideZapiaAction({
+      relevance: "WORK",
+      classification: "ACTION",
+      existingWorkItem: waitingWorkItem,
+      duplicateCandidateIds: [],
+      hasNewInboundMessage: false,
+    });
+    expect(plan.type).not.toBe("RECEIVED_CHECK");
   });
 });
 

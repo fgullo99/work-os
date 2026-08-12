@@ -42,9 +42,7 @@ export function computePriority(item: WorkItemRow, ctx: PriorityContext): Priori
     waitingOverdueScore = 30;
   }
 
-  // someone_waiting: el ultimo mensaje relevante del thread fue INBOUND y todavia tenemos
-  // una accion propia pendiente -> alguien esta esperando nuestra respuesta.
-  const someoneWaiting = Boolean(item.next_action) && item.last_message_direction === "INBOUND";
+  const someoneWaiting = isSomeoneWaiting(item);
   const someoneWaitingScore = someoneWaiting ? 30 : 0;
 
   const score = deadline.score + tierScore + blockingScore + waitingOverdueScore + someoneWaitingScore;
@@ -61,6 +59,13 @@ export function computePriority(item: WorkItemRow, ctx: PriorityContext): Priori
   });
 
   return { score, bucket, why };
+}
+
+/** El ultimo mensaje relevante del thread fue INBOUND y todavia tenemos una accion propia
+ * pendiente -> alguien esta esperando nuestra respuesta. Exportada para reuso desde
+ * src/lib/engine/sweep.ts (mismo criterio, no dos definiciones de "someone waiting"). */
+export function isSomeoneWaiting(item: WorkItemRow): boolean {
+  return Boolean(item.next_action) && item.last_message_direction === "INBOUND";
 }
 
 function urgencyForDate(dateISO: string, todayISO: string): { score: number; label: string | null } {

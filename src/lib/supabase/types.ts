@@ -32,7 +32,7 @@ export type ReviewItemKind =
   | "POSSIBLE_DUPLICATE"
   | "RECEIVED_CHECK";
 export type ReviewItemStatus = "PENDING" | "ACCEPTED" | "APPLIED" | "IGNORED";
-export type ReviewItemFeedback = "CORRECT" | "WRONG" | "NOT_IMPORTANT";
+export type ReviewItemFeedback = "CORRECT" | "WRONG" | "NOT_IMPORTANT" | "PERSONAL";
 export type WhatsAppIngestionStatus = "RECEIVED" | "PROCESSED" | "IGNORED" | "ERROR";
 
 export interface CompanyRow {
@@ -90,6 +90,11 @@ export interface WorkItemRow {
   is_demo: boolean;
   created_at: string;
   updated_at: string;
+  /** AI Work Manager: ultima vez que se re-examino este item contra su thread de Gmail
+   * (ver runReconciliationSweep) y con que fingerprint (historyId), para no gastar IA de
+   * nuevo si el thread no cambio. Null = nunca reconciliado. */
+  last_reconciled_at: string | null;
+  last_reconciled_thread_version: string | null;
 }
 
 export interface NoteRow {
@@ -134,6 +139,8 @@ export interface GoogleConnectionRow {
   bootstrap_range_days: number | null;
   last_synced_at: string | null;
   last_sync_summary: Record<string, unknown> | null;
+  last_reconciliation_summary: Record<string, unknown> | null;
+  last_reconciled_at: string | null;
   needs_reconnect: boolean;
   last_error: string | null;
   safe_mode: boolean;
@@ -206,6 +213,14 @@ export interface AiActionLogRow {
   undone_at: string | null;
 }
 
+export interface GmailThreadReconciliationRow {
+  thread_id: string;
+  last_checked_at: string;
+  thread_version: string | null;
+  outcome: string;
+  work_item_id: string | null;
+}
+
 // Tipos "Insert" escritos como object literals planos (sin Partial<Row> & {...}).
 // IMPORTANTE: @supabase/supabase-js 2.11x + TypeScript 5.9 resuelven el generic
 // `Schema extends GenericSchema ? Schema : never` de SupabaseClient evaluando
@@ -258,6 +273,8 @@ type WorkItemInsert = {
   ai_summary?: string | null;
   ai_confidence?: AiConfidence | null;
   last_message_direction?: SourceDirection | null;
+  last_reconciled_at?: string | null;
+  last_reconciled_thread_version?: string | null;
   is_demo?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -275,6 +292,8 @@ type GoogleConnectionInsert = {
   bootstrap_range_days?: number | null;
   last_synced_at?: string | null;
   last_sync_summary?: Record<string, unknown> | null;
+  last_reconciliation_summary?: Record<string, unknown> | null;
+  last_reconciled_at?: string | null;
   needs_reconnect?: boolean;
   last_error?: string | null;
   safe_mode?: boolean;
@@ -332,6 +351,13 @@ type AiActionLogInsert = {
   after_values?: Record<string, unknown>;
   created_at?: string;
   undone_at?: string | null;
+};
+type GmailThreadReconciliationInsert = {
+  thread_id: string;
+  last_checked_at?: string;
+  thread_version?: string | null;
+  outcome: string;
+  work_item_id?: string | null;
 };
 type CorrectionLogInsert = {
   id?: string;
@@ -407,6 +433,12 @@ export interface Database {
         Row: AiActionLogRow;
         Insert: AiActionLogInsert;
         Update: Partial<AiActionLogRow>;
+        Relationships: never[];
+      };
+      gmail_thread_reconciliation: {
+        Row: GmailThreadReconciliationRow;
+        Insert: GmailThreadReconciliationInsert;
+        Update: Partial<GmailThreadReconciliationRow>;
         Relationships: never[];
       };
     };

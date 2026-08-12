@@ -6,6 +6,7 @@ import type { ReviewItemRow } from "@/lib/supabase/types";
 import type { ReviewProposedPayload } from "@/lib/gmail/types";
 import { Badge } from "./Badge";
 import { SourceBadge } from "./SourceBadge";
+import { useToast } from "./Toast";
 
 const CONFIDENCE_TONE: Record<string, "action" | "waiting" | "neutral"> = {
   HIGH: "action",
@@ -23,6 +24,7 @@ const KIND_LABEL: Record<string, string> = {
 
 export function ReviewCard({ item }: { item: ReviewItemRow }) {
   const router = useRouter();
+  const toast = useToast();
   const payload = item.proposed_payload as unknown as ReviewProposedPayload;
   const via = item.raw_metadata?.provider === "zapia" ? "Zapia" : null;
 
@@ -44,12 +46,16 @@ export function ReviewCard({ item }: { item: ReviewItemRow }) {
   async function post(path: string, body?: Record<string, unknown>) {
     setBusy(true);
     try {
-      await fetch(`/api/review/${item.id}/${path}`, {
+      const res = await fetch(`/api/review/${item.id}/${path}`, {
         method: "POST",
         headers: body ? { "Content-Type": "application/json" } : undefined,
         body: body ? JSON.stringify(body) : undefined,
       });
+      if (!res.ok) throw new Error(`status ${res.status}`);
       router.refresh();
+    } catch (err) {
+      console.error(`[review-card] ${path} fallo:`, err);
+      toast.show("No se pudo aplicar la accion. Reintentá.");
     } finally {
       setBusy(false);
     }
@@ -159,6 +165,21 @@ export function ReviewCard({ item }: { item: ReviewItemRow }) {
           </button>
         )}
       </div>
+
+      {!isReceivedCheck && (
+        <div className="mt-2 flex flex-wrap gap-1.5 border-t border-ink-100 pt-2 text-xs text-ink-400">
+          <span className="mr-1">La IA se equivocó?</span>
+          <button type="button" disabled={busy} className="btn-ghost" onClick={() => post("feedback", { feedback: "WRONG" })}>
+            Wrong
+          </button>
+          <button type="button" disabled={busy} className="btn-ghost" onClick={() => post("feedback", { feedback: "NOT_IMPORTANT" })}>
+            Not Important
+          </button>
+          <button type="button" disabled={busy} className="btn-ghost" onClick={() => post("feedback", { feedback: "PERSONAL" })}>
+            Personal
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import type { CompanyRow, ContactRow, ContextRow, ReviewItemRow } from "@/lib/supabase/types";
 import type { DashboardData, RecentActivityRow } from "@/lib/workItems/queries";
 import { AppShell } from "./AppShell";
@@ -16,6 +15,8 @@ import { WorkItemDetailSheet } from "./WorkItemDetailSheet";
 import { DatePickerModal } from "./DatePickerModal";
 import { DelegateModal } from "./DelegateModal";
 import { ReviewCard } from "./ReviewCard";
+import { ToastProvider, useToast } from "./Toast";
+import { runOptimisticListAction } from "@/lib/ui/optimisticListAction";
 
 interface Props {
   userFirstName: string;
@@ -34,7 +35,15 @@ interface Props {
 
 const REVIEW_PREVIEW_COUNT = 5;
 
-export function DashboardClient({
+export function DashboardClient(props: Props) {
+  return (
+    <ToastProvider>
+      <DashboardClientInner {...props} />
+    </ToastProvider>
+  );
+}
+
+function DashboardClientInner({
   userFirstName,
   todayISO,
   data,
@@ -48,13 +57,27 @@ export function DashboardClient({
   recentActivity,
   assistantObservations,
 }: Props) {
-  const router = useRouter();
+  const toast = useToast();
   const [captureOpen, setCaptureOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [quickPostponeId, setQuickPostponeId] = useState<string | null>(null);
   const [quickDelegateId, setQuickDelegateId] = useState<string | null>(null);
   const [quickExtendId, setQuickExtendId] = useState<string | null>(null);
   const [showAllReview, setShowAllReview] = useState(false);
+
+  // Espejo local de las 3 listas para poder hacer optimistic update (sacar/actualizar una
+  // card al toque, sin esperar al servidor). Se resincroniza con las props cada vez que el
+  // servidor manda datos nuevos de verdad (ej: al aceptar un Review, que si sigue haciendo
+  // router.refresh() porque ahi si aparecen items nuevos que el cliente no puede inventar).
+  const [todayItems, setTodayItems] = useState(data.todayItems);
+  const [atRiskItems, setAtRiskItems] = useState(data.atRiskItems);
+  const [waitingForItems, setWaitingForItems] = useState(data.waitingForItems);
+
+  useEffect(() => {
+    setTodayItems(data.todayItems);
+    setAtRiskItems(data.atRiskItems);
+    setWaitingForItems(data.waitingForItems);
+  }, [data]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -64,13 +87,38 @@ export function DashboardClient({
     }
   }, []);
 
-  async function postAction(id: string, path: string, body?: Record<string, unknown>) {
-    await fetch(`/api/work-items/${id}/${path}`, {
-      method: "POST",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
+  /**
+   * Accion optimista sobre un item de una lista puntual (Today/Waiting): lo saca de esa
+   * lista al toque (la card desaparece ya, sin esperar la respuesta), dispara el POST en
+   * paralelo, y si falla lo vuelve a poner en su lugar original + toast de error. No hace
+   * router.refresh() — el resto de las listas se resincronizan solas la proxima vez que el
+   * servidor mande props nuevas (ej: al aceptar un Review). Logica real en
+   * src/lib/ui/optimisticListAction.ts (extraida para poder testearla sin montar el
+   * Dashboard completo).
+   */
+  async function postActionOptimistic<T extends { id: string }>(
+    id: string,
+    path: string,
+    currentList: T[],
+    setList: React.Dispatch<React.SetStateAction<T[]>> | null,
+    body?: Record<string, unknown>
+  ) {
+    await runOptimisticListAction({
+      id,
+      path,
+      currentList,
+      setList: setList ?? (() => {}),
+      body,
+      onError: () => toast.show("No se pudo aplicar el cambio, se deshizo. Reintentá."),
     });
-    router.refresh();
+  }
+
+  function handleDone(id: string) {
+    postActionOptimistic(id, "done", todayItems, setTodayItems);
+  }
+
+  function handleReceived(id: string) {
+    postActionOptimistic(id, "received", waitingForItems, setWaitingForItems);
   }
 
   const visibleReviewItems = showAllReview ? reviewItems : reviewItems.slice(0, REVIEW_PREVIEW_COUNT);
@@ -100,15 +148,15 @@ export function DashboardClient({
       <div className="space-y-5">
         <section>
           <h2 className="mb-3 text-sm font-semibold text-ink-800">HOY</h2>
-          {data.todayItems.length === 0 ? (
+          {todayItems.length === 0 ? (
             <div className="card p-6 text-center text-sm text-ink-400">No hay nada urgente para hoy.</div>
           ) : (
             <div className="space-y-3">
-              {data.todayItems.map((item) => (
+              {todayItems.map((item) => (
                 <WorkItemCard
                   key={item.id}
                   item={item}
-                  onDone={() => postAction(item.id, "done")}
+                  onDone={() => handleDone(item.id)}
                   onPostpone={() => setQuickPostponeId(item.id)}
                   onDelegate={() => setQuickDelegateId(item.id)}
                   onEdit={() => setDetailId(item.id)}
@@ -118,29 +166,29 @@ export function DashboardClient({
           )}
         </section>
 
-        <Collapsible title="EN RIESGO" count={data.atRiskItems.length}>
-          {data.atRiskItems.length === 0 ? (
+        <Collapsible title="EN RIESGO" count={atRiskItems.length}>
+          {atRiskItems.length === 0 ? (
             <p className="text-sm text-ink-400">Sin riesgos detectados.</p>
           ) : (
             <div className="divide-y divide-ink-100">
-              {data.atRiskItems.map((item) => (
+              {atRiskItems.map((item) => (
                 <AtRiskRow key={item.id} item={item} onEdit={() => setDetailId(item.id)} />
               ))}
             </div>
           )}
         </Collapsible>
 
-        <Collapsible title="ESPERANDO" count={data.waitingForItems.length}>
-          {data.waitingForItems.length === 0 ? (
+        <Collapsible title="ESPERANDO" count={waitingForItems.length}>
+          {waitingForItems.length === 0 ? (
             <p className="text-sm text-ink-400">No estas esperando nada registrado.</p>
           ) : (
             <div className="divide-y divide-ink-100">
-              {data.waitingForItems.map((item) => (
+              {waitingForItems.map((item) => (
                 <WaitingForRow
                   key={item.id}
                   item={item}
                   todayISO={todayISO}
-                  onReceived={() => postAction(item.id, "received")}
+                  onReceived={() => handleReceived(item.id)}
                   onExtend={() => setQuickExtendId(item.id)}
                   onEdit={() => setDetailId(item.id)}
                 />
@@ -193,7 +241,7 @@ export function DashboardClient({
         todayISO={todayISO}
         onClose={() => setQuickPostponeId(null)}
         onConfirm={(dateISO) => {
-          if (quickPostponeId) postAction(quickPostponeId, "postpone", { until: dateISO });
+          if (quickPostponeId) postActionOptimistic(quickPostponeId, "postpone", todayItems, setTodayItems, { until: dateISO });
           setQuickPostponeId(null);
         }}
       />
@@ -204,7 +252,18 @@ export function DashboardClient({
         todayISO={todayISO}
         onClose={() => setQuickExtendId(null)}
         onConfirm={(dateISO) => {
-          if (quickExtendId) postAction(quickExtendId, "extend", { expected_date: dateISO });
+          if (quickExtendId) {
+            const id = quickExtendId;
+            setWaitingForItems((items) => items.map((i) => (i.id === id ? { ...i, expected_date: dateISO } : i)));
+            fetch(`/api/work-items/${id}/extend`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ expected_date: dateISO }),
+            }).catch((err) => {
+              console.error("[dashboard] extend fallo:", err);
+              toast.show("No se pudo extender la fecha. Reintentá.");
+            });
+          }
           setQuickExtendId(null);
         }}
       />
@@ -216,7 +275,10 @@ export function DashboardClient({
         onClose={() => setQuickDelegateId(null)}
         onConfirm={(responsibleId, expectedDateISO) => {
           if (quickDelegateId)
-            postAction(quickDelegateId, "delegate", { responsible_id: responsibleId, expected_date: expectedDateISO });
+            postActionOptimistic(quickDelegateId, "delegate", todayItems, setTodayItems, {
+              responsible_id: responsibleId,
+              expected_date: expectedDateISO,
+            });
           setQuickDelegateId(null);
         }}
       />

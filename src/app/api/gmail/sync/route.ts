@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { getConnectionOrThrow, runIncrementalSync } from "@/lib/gmail/sync";
+import { runReconciliationSweep, type ReconciliationSummary } from "@/lib/gmail/reconcile";
 
 // Tope maximo permitido por Vercel para este endpoint. El sync procesa threads en
 // serie con una llamada real a Anthropic por thread, asi que puede tardar mas que el
@@ -36,7 +37,19 @@ async function handler(request: Request) {
   try {
     const connection = await getConnectionOrThrow(supabase);
     const summary = await runIncrementalSync(supabase, connection);
-    return NextResponse.json({ ok: true, summary });
+
+    // AI Work Manager, encadenado despues de cada sync relevante — nunca bloquea la
+    // respuesta del sync si falla (un problema en la reconciliacion no debe tumbar el sync
+    // normal, que ya corrio y persistio bien). Tope de candidatos acotado (ver reconcile.ts)
+    // para no arriesgar el mismo timeout que ya tuvimos en este endpoint.
+    let reconciliation: ReconciliationSummary | null = null;
+    try {
+      reconciliation = await runReconciliationSweep(supabase, connection);
+    } catch (err) {
+      console.error("[gmail sync] reconciliation fallo (el sync ya se aplico bien):", err);
+    }
+
+    return NextResponse.json({ ok: true, summary, reconciliation });
   } catch (err) {
     console.error("[gmail sync]", err);
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "sync_failed" }, { status: 500 });
