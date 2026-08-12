@@ -69,6 +69,7 @@ const EMAIL_TOOL_INPUT_SCHEMA = {
   properties: {
     relevance: { type: "string", enum: ["WORK", "PERSONAL", "UNCERTAIN"] },
     classification: { type: "string", enum: ["ACTION", "WAITING", "COMMITMENT", "INFO", "IGNORE"] },
+    attention_owner: { type: "string", enum: ["FELIPE", "TEAM_OTHER", "EXTERNAL", "SHARED", "UNKNOWN"] },
     next_action: { type: ["string", "null"] },
     waiting_for_person: { type: ["string", "null"] },
     waiting_for_what: { type: ["string", "null"] },
@@ -92,6 +93,7 @@ const EMAIL_TOOL_INPUT_SCHEMA = {
   required: [
     "relevance",
     "classification",
+    "attention_owner",
     "next_action",
     "waiting_for_person",
     "waiting_for_what",
