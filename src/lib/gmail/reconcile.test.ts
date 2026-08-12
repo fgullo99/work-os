@@ -189,6 +189,7 @@ function fakeAIProvider(result: Partial<EmailThreadResult>): AIProvider {
   const full: EmailThreadResult = {
     relevance: "WORK",
     classification: "INFO",
+    attention_owner: "FELIPE",
     next_action: null,
     waiting_for_person: null,
     waiting_for_what: null,
@@ -271,7 +272,7 @@ describe("reconcileCandidate — idempotencia (AI Work Manager no paga IA de mas
     const deps: ReconcileDeps = {
       supabase: supabase as any,
       gmail,
-      applyDeps: { aiProvider: fakeAIProvider({}), todayISO: TODAY, safeMode: false },
+      applyDeps: { aiProvider: fakeAIProvider({}), todayISO: TODAY, safeMode: false, userAddresses: ["me@tmc.com"] },
       userAddresses: ["me@tmc.com"],
     };
     const result = await reconcileCandidate(deps, {
@@ -295,7 +296,7 @@ describe("reconcileCandidate — idempotencia (AI Work Manager no paga IA de mas
     const deps: ReconcileDeps = {
       supabase: supabase as any,
       gmail,
-      applyDeps: { aiProvider: fakeAIProvider({}), todayISO: TODAY, safeMode: false },
+      applyDeps: { aiProvider: fakeAIProvider({}), todayISO: TODAY, safeMode: false, userAddresses: ["me@tmc.com"] },
       userAddresses: ["me@tmc.com"],
     };
     const result = await reconcileCandidate(deps, {
@@ -360,7 +361,7 @@ describe("reconcileCandidate — idempotencia (AI Work Manager no paga IA de mas
     const deps: ReconcileDeps = {
       supabase: supabase as any,
       gmail,
-      applyDeps: { aiProvider, todayISO: TODAY, safeMode: false },
+      applyDeps: { aiProvider, todayISO: TODAY, safeMode: false, userAddresses: ["me@tmc.com"] },
       userAddresses: ["me@tmc.com"],
     };
 
@@ -396,6 +397,7 @@ function logEntry(overrides: Partial<ThreadSyncLogEntry> = {}): ThreadSyncLogEnt
     classification: "ACTION",
     confidence: "HIGH",
     isDelegation: false,
+    attentionOwner: "FELIPE",
     action: "AUTO_CREATE",
     ...overrides,
   };

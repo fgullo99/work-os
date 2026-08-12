@@ -282,7 +282,7 @@ export async function runReconciliationSweep(
   const deps: ReconcileDeps = {
     supabase,
     gmail,
-    applyDeps: { aiProvider, todayISO, safeMode: connection.safe_mode },
+    applyDeps: { aiProvider, todayISO, safeMode: connection.safe_mode, userAddresses },
     userAddresses,
   };
 

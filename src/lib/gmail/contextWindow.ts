@@ -39,12 +39,19 @@ function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
   return -1;
 }
 
-export function buildThreadContextText(thread: NormalizedThread, existingWorkItem: ExistingWorkItemSummary | null): string {
+export function buildThreadContextText(
+  thread: NormalizedThread,
+  existingWorkItem: ExistingWorkItemSummary | null,
+  userAddresses: string[] = []
+): string {
   const relevantMessages = selectAdaptiveContext(thread.messages);
   const omitted = thread.messages.length - relevantMessages.length;
 
   const lines: string[] = [];
   lines.push(`Asunto del thread: ${thread.subject}`);
+  if (userAddresses.length > 0) {
+    lines.push(`Cuenta conectada (direccion del usuario): ${userAddresses.join(", ")}`);
+  }
   if (omitted > 0) {
     lines.push(`(se omiten ${omitted} mensaje(s) intermedios del thread por longitud — se muestra el primer mensaje, los mas recientes, y el ultimo de cada direccion)`);
   }
@@ -53,6 +60,8 @@ export function buildThreadContextText(thread: NormalizedThread, existingWorkIte
   for (const m of relevantMessages) {
     const who = m.fromName ? `${m.fromName} <${m.from}>` : m.from;
     lines.push(`--- Mensaje ${m.direction} de ${who} — ${m.date} ---`);
+    lines.push(`To: ${m.to.length > 0 ? m.to.join(", ") : "(sin destinatarios visibles)"}`);
+    if (m.cc.length > 0) lines.push(`Cc: ${m.cc.join(", ")}`);
     lines.push(m.bodyText.trim() || m.snippet);
     lines.push("");
   }

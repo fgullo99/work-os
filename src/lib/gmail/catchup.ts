@@ -167,7 +167,7 @@ export async function runCatchupBatch(
   const userAddresses = getUserAddresses();
   const aiProvider = getAIProvider();
   const todayISO = todayInTimezone();
-  const applyDeps: ApplySyncDeps = { supabase, aiProvider, todayISO, safeMode: connection.safe_mode };
+  const applyDeps: ApplySyncDeps = { supabase, aiProvider, todayISO, safeMode: connection.safe_mode, userAddresses };
 
   const startedAt = Date.now();
   let cursorIndex = state.cursor_index;

@@ -16,6 +16,11 @@ export interface NormalizeEmailThreadInput {
   existingWorkItem: ExistingWorkItemSummary | null;
   /** "Hoy" en America/Argentina/Buenos_Aires, formato YYYY-MM-DD. Nunca UTC. */
   currentDateISO: string;
+  /** Direcciones de la cuenta conectada (USER_EMAIL_ADDRESSES) — se le muestran al modelo
+   * junto a To/Cc de cada mensaje para que pueda determinar attention_owner (a quien le
+   * corresponde la proxima accion) sin confundir "el usuario esta en Cc" con "el usuario es
+   * el responsable". Ver src/lib/gmail/contextWindow.ts. */
+  userAddresses: string[];
 }
 
 export interface NormalizeWhatsAppConversationInput {

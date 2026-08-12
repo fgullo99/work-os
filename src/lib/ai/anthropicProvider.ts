@@ -252,7 +252,7 @@ export class AnthropicProvider implements AIProvider {
   }
 
   async normalizeEmailThread(input: NormalizeEmailThreadInput): Promise<EmailThreadResult> {
-    const contextText = buildThreadContextText(input.thread, input.existingWorkItem);
+    const contextText = buildThreadContextText(input.thread, input.existingWorkItem, input.userAddresses);
     return this.callToolWithRetry({
       system: buildEmailThreadSystemPrompt(input.currentDateISO),
       userContent: contextText,

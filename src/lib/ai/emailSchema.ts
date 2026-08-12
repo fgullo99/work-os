@@ -16,6 +16,12 @@ export const emailThreadResultSchema = z.object({
     .enum(["ACTION", "WAITING", "COMMITMENT", "INFO", "IGNORE"])
     .describe("Clasificacion dominante del thread."),
 
+  attention_owner: z
+    .enum(["FELIPE", "TEAM_OTHER", "EXTERNAL", "SHARED", "UNKNOWN"])
+    .describe(
+      "A quien le corresponde la proxima accion/decision real, evaluado DESPUES de relevance y classification. FELIPE si es inequivocamente suyo, TEAM_OTHER si es de otra persona interna, EXTERNAL si se espera a un tercero (cliente/proveedor), SHARED si involucra al equipo sin responsable individual claro, UNKNOWN si no se puede determinar. Ver reglas ATTENTION_OWNER."
+    ),
+
   next_action: z.string().min(1).max(200).nullable().describe("Que tiene que hacer el usuario. Null si no aplica."),
   waiting_for_person: z.string().min(1).max(100).nullable(),
   waiting_for_what: z.string().min(1).max(200).nullable(),

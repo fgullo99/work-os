@@ -5,15 +5,29 @@ import type { WorkItemRow } from "@/lib/supabase/types";
  * Separado de EmailThreadResult a proposito: el decision engine es una funcion pura,
  * testeable sin tocar la IA ni el resolver de fechas — recibe solo lo que necesita decidir.
  */
+export type AttentionOwner = "FELIPE" | "TEAM_OTHER" | "EXTERNAL" | "SHARED" | "UNKNOWN";
+
 export interface ResolvedClassification {
   relevance: "WORK" | "PERSONAL" | "UNCERTAIN";
   classification: "ACTION" | "WAITING" | "COMMITMENT" | "INFO" | "IGNORE";
+  /** A quien le corresponde la proxima accion/decision real (ver ATTENTION_OWNER en
+   * emailPrompt.ts). Gatea el auto-apply: nunca se crea/actualiza automaticamente un Work
+   * Item si el owner no es FELIPE o EXTERNAL — TEAM_OTHER/SHARED/UNKNOWN siempre van a
+   * Review, nunca se auto-asigna trabajo ajeno a Felipe. */
+  attentionOwner: AttentionOwner;
   next_action: string | null;
   waiting_for_what: string | null;
   due_date: string | null;
   expected_date: string | null;
   committed_date: string | null;
   confidence: "HIGH" | "MEDIUM" | "LOW";
+}
+
+/** true si el owner NO es alguien para quien tiene sentido que Work OS mantenga
+ * automaticamente un item en el tablero personal de Felipe (el o un tercero externo del que
+ * esta esperando). TEAM_OTHER/SHARED/UNKNOWN siempre requieren confirmacion humana. */
+function attentionOwnerRequiresReview(owner: AttentionOwner): boolean {
+  return owner !== "FELIPE" && owner !== "EXTERNAL";
 }
 
 export interface DecisionInput {
@@ -119,6 +133,12 @@ export function decideAction(input: DecisionInput): ActionPlan {
     if (classification.relevance === "UNCERTAIN") {
       return { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: existingWorkItem.id };
     }
+    // ATTENTION_OWNER: si la proxima accion no es de Felipe ni de un tercero externo del que
+    // esta esperando (TEAM_OTHER/SHARED/UNKNOWN), nunca se actualiza solo — evita
+    // auto-asignarle a Felipe algo que en realidad le corresponde a otra persona.
+    if (attentionOwnerRequiresReview(classification.attentionOwner)) {
+      return { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: existingWorkItem.id };
+    }
     const fieldsToFill = safeFieldsToFill(classification, existingWorkItem);
     // Nada nuevo que llenar y nada en conflicto (ya descartado arriba): el thread tuvo
     // actividad pero no cambia el estado del Work Item — ej. un "sigo esperando" repetido,
@@ -142,6 +162,14 @@ export function decideAction(input: DecisionInput): ActionPlan {
     classification.committed_date === null
   ) {
     return { type: "IGNORE", reason: "classification=INFO sin next_action/waiting_for_what/committed_date (nada accionable)" };
+  }
+
+  // ATTENTION_OWNER: nunca se crea automaticamente un Work Item personal para Felipe si la
+  // proxima accion es de otra persona (TEAM_OTHER), del equipo sin responsable claro
+  // (SHARED), o no se pudo determinar (UNKNOWN). Sigue pudiendo ir a Review si parece
+  // importante — la diferencia es que jamas se auto-crea.
+  if (attentionOwnerRequiresReview(classification.attentionOwner)) {
+    return { type: "REVIEW_NEW_WORK_ITEM" };
   }
 
   if (duplicateCandidateIds.length > 0) {

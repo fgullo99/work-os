@@ -143,7 +143,12 @@ async function main() {
 
     let outcome: "AUTO PASS" | "REVIEW REQUIRED" | "FAILED STRUCTURE";
     try {
-      const raw = await provider.normalizeEmailThread({ thread: testCase.thread, existingWorkItem: null, currentDateISO: todayISO });
+      const raw = await provider.normalizeEmailThread({
+        thread: testCase.thread,
+        existingWorkItem: null,
+        currentDateISO: todayISO,
+        userAddresses: ["felipe@tmcsudamerica.com.ar"],
+      });
       const resolved = withResolvedDates(raw, todayISO);
       console.log(
         "OUTPUT STRUCTURED:",

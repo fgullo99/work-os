@@ -8,6 +8,7 @@ function classification(overrides: Partial<ResolvedClassification> = {}): Resolv
   return {
     relevance: "WORK",
     classification: "ACTION",
+    attentionOwner: "FELIPE",
     next_action: "Hacer algo",
     waiting_for_what: null,
     due_date: null,
@@ -334,5 +335,103 @@ describe("decideAction", () => {
       lastMessageIsOutbound: false,
     });
     expect(plan.type).toBe("CREATE_WORK_ITEM");
+  });
+});
+
+describe("ATTENTION_OWNER — nunca se auto-asigna a Felipe un trabajo que no es suyo (7 casos obligatorios del pedido)", () => {
+  it("1) Inbound dirigido explicitamente a Felipe -> attentionOwner FELIPE -> se puede crear/actualizar solo", () => {
+    const plan = decideAction({
+      classification: classification({ classification: "ACTION", attentionOwner: "FELIPE", confidence: "HIGH" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("CREATE_WORK_ITEM");
+  });
+
+  it("2) Inbound dirigido explicitamente a Fernando (Felipe solo en Cc) -> attentionOwner TEAM_OTHER -> nunca CREATE_WORK_ITEM, va a Review", () => {
+    const plan = decideAction({
+      classification: classification({ classification: "ACTION", attentionOwner: "TEAM_OTHER", confidence: "HIGH" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("REVIEW_NEW_WORK_ITEM");
+  });
+
+  it("3) Felipe delega en Fernando (is_delegation) -> classification WAITING + attentionOwner TEAM_OTHER -> nunca se auto-aplica, va a Review (nunca ACTION personal)", () => {
+    const plan = decideAction({
+      classification: classification({ classification: "WAITING", attentionOwner: "TEAM_OTHER", next_action: null, waiting_for_what: "Que Fernando revise el plano", confidence: "HIGH" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: true,
+    });
+    expect(plan.type).toBe("REVIEW_NEW_WORK_ITEM");
+  });
+
+  it("4) Felipe promete enviar algo (OUTBOUND) -> attentionOwner FELIPE + ACTION/COMMITMENT -> se puede crear solo", () => {
+    const plan = decideAction({
+      classification: classification({ classification: "ACTION", attentionOwner: "FELIPE", confidence: "HIGH" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: true,
+    });
+    expect(plan.type).toBe("CREATE_WORK_ITEM");
+  });
+
+  it("5) Felipe le pide algo a un proveedor (OUTBOUND) -> attentionOwner EXTERNAL + WAITING -> se puede crear solo (Felipe es quien espera)", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "WAITING",
+        attentionOwner: "EXTERNAL",
+        next_action: null,
+        waiting_for_what: "Confirmacion de tension secundaria",
+        confidence: "HIGH",
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: true,
+    });
+    expect(plan.type).toBe("CREATE_WORK_ITEM");
+  });
+
+  it("6) Correo laboral grupal sin responsable claro -> attentionOwner SHARED o UNKNOWN -> nunca auto-crea, solo Review", () => {
+    for (const owner of ["SHARED", "UNKNOWN"] as const) {
+      const plan = decideAction({
+        classification: classification({ classification: "ACTION", attentionOwner: owner, confidence: "HIGH" }),
+        existingWorkItem: null,
+        duplicateCandidateIds: [],
+        hasNewInboundSinceLastSync: false,
+        lastMessageIsOutbound: false,
+      });
+      expect(plan.type).toBe("REVIEW_NEW_WORK_ITEM");
+    }
+  });
+
+  it("7) Conversacion personal con accion y fecha -> relevance PERSONAL -> IGNORE, sin importar attentionOwner", () => {
+    const plan = decideAction({
+      classification: classification({ relevance: "PERSONAL", classification: "ACTION", attentionOwner: "FELIPE", confidence: "HIGH" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("IGNORE");
+  });
+
+  it("8) Thread laboral existente, pero la nueva accion es de otra persona (TEAM_OTHER) -> nunca UPDATE_WORK_ITEM_SAFE/NO_OP, siempre Review", () => {
+    const plan = decideAction({
+      classification: classification({ classification: "ACTION", attentionOwner: "TEAM_OTHER", next_action: "Confirmar razon social", confidence: "HIGH" }),
+      existingWorkItem: workItem({ next_action: null }),
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("REVIEW_UPDATE_WORK_ITEM");
   });
 });

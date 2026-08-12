@@ -53,7 +53,7 @@ async function processThreadIds(
     try {
       const raw = await getThread(gmail, threadId);
       const thread = parseThread(raw, userAddresses);
-      const entry = await processThread({ supabase, aiProvider, todayISO, safeMode }, thread);
+      const entry = await processThread({ supabase, aiProvider, todayISO, safeMode, userAddresses }, thread);
       entries.push(entry);
       // Observabilidad minima: nunca loguear cuerpos de email completos ni tokens/keys,
       // solo metadata de decision (ver seccion 21 del spec de Etapa 2).
@@ -72,6 +72,7 @@ async function processThreadIds(
         classification: null,
         confidence: null,
         isDelegation: null,
+        attentionOwner: null,
         action: "ERROR",
       });
     }

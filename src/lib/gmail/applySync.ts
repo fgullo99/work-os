@@ -23,6 +23,7 @@ export interface ThreadSyncLogEntry {
   classification: string | null;
   confidence: string | null;
   isDelegation: boolean | null;
+  attentionOwner: string | null;
   action: string;
   /** Solo se llena cuando processThread corre desde el AI Work Manager (reconciliacion o
    * discovery, ver reconcile.ts) en vez del sync incremental normal — permite armar el
@@ -42,6 +43,9 @@ export interface ApplySyncDeps {
    * solo para lo que ademas pase isAutoCreateEligible/classifyAutoUpdate (ver
    * src/lib/engine/automationGate.ts). */
   safeMode: boolean;
+  /** Direcciones de la cuenta conectada — se le pasan al Normalizer para que pueda comparar
+   * contra To/Cc de cada mensaje y determinar attention_owner (ver emailPrompt.ts). */
+  userAddresses: string[];
 }
 
 export interface AutomationGateContext {
@@ -102,6 +106,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     classification: null,
     confidence: null,
     isDelegation: null,
+    attentionOwner: null,
     action: "",
   };
 
@@ -131,18 +136,21 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
         }
       : null,
     currentDateISO: deps.todayISO,
+    userAddresses: deps.userAddresses,
   });
 
   log.relevance = raw.relevance;
   log.classification = raw.classification;
   log.confidence = raw.confidence;
   log.isDelegation = raw.is_delegation;
+  log.attentionOwner = raw.attention_owner;
   log.existingWorkItemId = existingWorkItem?.id ?? null;
   log.rationale = raw.rationale;
 
   const resolved: ResolvedClassification = {
     relevance: raw.relevance,
     classification: raw.classification,
+    attentionOwner: raw.attention_owner,
     next_action: raw.next_action,
     waiting_for_what: raw.waiting_for_what,
     due_date: resolveDatePhrase(raw.due_date_phrase, deps.todayISO),
@@ -373,6 +381,7 @@ function buildProposedPayload(raw: EmailThreadResult, resolved: ResolvedClassifi
     blocking: raw.blocking,
     is_delegation: raw.is_delegation,
     classification: raw.classification,
+    attention_owner: raw.attention_owner,
   };
 }
 

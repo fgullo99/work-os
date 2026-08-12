@@ -118,6 +118,7 @@ function defaultEmailResult(overrides: Partial<EmailThreadResult>): EmailThreadR
   return {
     relevance: "WORK",
     classification: "INFO",
+    attention_owner: "FELIPE",
     next_action: null,
     waiting_for_person: null,
     waiting_for_what: null,
