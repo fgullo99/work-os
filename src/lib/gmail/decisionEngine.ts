@@ -7,14 +7,17 @@ import type { WorkItemRow } from "@/lib/supabase/types";
  */
 export type AttentionOwner = "FELIPE" | "TEAM_OTHER" | "EXTERNAL" | "SHARED" | "UNKNOWN";
 
+/** Solo aplica cuando attentionOwner=TEAM_OTHER — ver TEAM_OTHER_RELATION en emailPrompt.ts. */
+export type TeamOtherRelation = "DELEGATED_BY_FELIPE" | "OWNED_BY_OTHER" | "FYI_ONLY" | "BLOCKS_FELIPE" | "AMBIGUOUS";
+
 export interface ResolvedClassification {
   relevance: "WORK" | "PERSONAL" | "UNCERTAIN";
   classification: "ACTION" | "WAITING" | "COMMITMENT" | "INFO" | "IGNORE";
   /** A quien le corresponde la proxima accion/decision real (ver ATTENTION_OWNER en
-   * emailPrompt.ts). Gatea el auto-apply: nunca se crea/actualiza automaticamente un Work
-   * Item si el owner no es FELIPE o EXTERNAL — TEAM_OTHER/SHARED/UNKNOWN siempre van a
-   * Review, nunca se auto-asigna trabajo ajeno a Felipe. */
+   * emailPrompt.ts). Gatea el auto-apply junto con teamOtherRelation — ver attentionGate(). */
   attentionOwner: AttentionOwner;
+  /** null salvo que attentionOwner sea TEAM_OTHER. */
+  teamOtherRelation: TeamOtherRelation | null;
   next_action: string | null;
   waiting_for_what: string | null;
   due_date: string | null;
@@ -23,11 +26,41 @@ export interface ResolvedClassification {
   confidence: "HIGH" | "MEDIUM" | "LOW";
 }
 
-/** true si el owner NO es alguien para quien tiene sentido que Work OS mantenga
- * automaticamente un item en el tablero personal de Felipe (el o un tercero externo del que
- * esta esperando). TEAM_OTHER/SHARED/UNKNOWN siempre requieren confirmacion humana. */
-function attentionOwnerRequiresReview(owner: AttentionOwner): boolean {
-  return owner !== "FELIPE" && owner !== "EXTERNAL";
+type AttentionGateOutcome =
+  /** Se puede crear/actualizar automaticamente, como si fuera FELIPE. */
+  | "PASS"
+  /** No es trabajo personal de Felipe pero tampoco amerita Review — no crea nada nuevo, y si
+   * ya existe un Work Item solo se refresca actividad (NO_OP), nunca se llena un campo. */
+  | "SILENT"
+  /** Ambiguedad real — requiere confirmacion humana. */
+  | "REVIEW";
+
+/**
+ * Un solo lugar de verdad para el gate de ATTENTION_OWNER. Deliberadamente NO manda todo lo
+ * que no es FELIPE/EXTERNAL a Review — eso convertiria Review en una segunda bandeja de
+ * entrada (ver refinamiento del pedido). TEAM_OTHER se resuelve por su sub-relacion:
+ * DELEGATED_BY_FELIPE/BLOCKS_FELIPE pasan igual que si fuera Felipe (son items legitimos de
+ * SU tablero: algo que delego, o algo que lo bloquea); OWNED_BY_OTHER/FYI_ONLY no generan
+ * nada para el tablero personal pero tampoco piden confirmacion (SILENT); solo AMBIGUOUS (y
+ * SHARED/UNKNOWN, que ya son ambiguos por definicion) van a Review.
+ */
+function attentionGate(owner: AttentionOwner, teamOtherRelation: TeamOtherRelation | null): AttentionGateOutcome {
+  if (owner === "FELIPE" || owner === "EXTERNAL") return "PASS";
+  if (owner === "TEAM_OTHER") {
+    switch (teamOtherRelation) {
+      case "DELEGATED_BY_FELIPE":
+      case "BLOCKS_FELIPE":
+        return "PASS";
+      case "OWNED_BY_OTHER":
+      case "FYI_ONLY":
+        return "SILENT";
+      case "AMBIGUOUS":
+      default:
+        return "REVIEW";
+    }
+  }
+  // SHARED, UNKNOWN: ambiguos por definicion.
+  return "REVIEW";
 }
 
 export interface DecisionInput {
@@ -133,11 +166,15 @@ export function decideAction(input: DecisionInput): ActionPlan {
     if (classification.relevance === "UNCERTAIN") {
       return { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: existingWorkItem.id };
     }
-    // ATTENTION_OWNER: si la proxima accion no es de Felipe ni de un tercero externo del que
-    // esta esperando (TEAM_OTHER/SHARED/UNKNOWN), nunca se actualiza solo — evita
-    // auto-asignarle a Felipe algo que en realidad le corresponde a otra persona.
-    if (attentionOwnerRequiresReview(classification.attentionOwner)) {
+    // ATTENTION_OWNER: PASS sigue el camino normal; SILENT (tarea ajena sin ambiguedad, ej.
+    // OWNED_BY_OTHER/FYI_ONLY) no actualiza nada pero tampoco pide Review; solo REVIEW
+    // (ambiguedad real) fuerza confirmacion humana.
+    const gate = attentionGate(classification.attentionOwner, classification.teamOtherRelation);
+    if (gate === "REVIEW") {
       return { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: existingWorkItem.id };
+    }
+    if (gate === "SILENT") {
+      return { type: "NO_OP", workItemId: existingWorkItem.id };
     }
     const fieldsToFill = safeFieldsToFill(classification, existingWorkItem);
     // Nada nuevo que llenar y nada en conflicto (ya descartado arriba): el thread tuvo
@@ -164,12 +201,17 @@ export function decideAction(input: DecisionInput): ActionPlan {
     return { type: "IGNORE", reason: "classification=INFO sin next_action/waiting_for_what/committed_date (nada accionable)" };
   }
 
-  // ATTENTION_OWNER: nunca se crea automaticamente un Work Item personal para Felipe si la
-  // proxima accion es de otra persona (TEAM_OTHER), del equipo sin responsable claro
-  // (SHARED), o no se pudo determinar (UNKNOWN). Sigue pudiendo ir a Review si parece
-  // importante — la diferencia es que jamas se auto-crea.
-  if (attentionOwnerRequiresReview(classification.attentionOwner)) {
+  // ATTENTION_OWNER: mismo gate que en el branch de existingWorkItem. PASS (FELIPE/EXTERNAL,
+  // o TEAM_OTHER delegado por Felipe / que lo bloquea) sigue el camino normal de creacion.
+  // SILENT (tarea ajena sin ambiguedad) nunca crea un Work Item, pero tampoco genera Review
+  // — no queremos que Review se llene de FYI/tareas de otras personas. Solo REVIEW
+  // (ambiguedad real: SHARED/UNKNOWN/AMBIGUOUS) pide confirmacion.
+  const gate = attentionGate(classification.attentionOwner, classification.teamOtherRelation);
+  if (gate === "REVIEW") {
     return { type: "REVIEW_NEW_WORK_ITEM" };
+  }
+  if (gate === "SILENT") {
+    return { type: "IGNORE", reason: `attention_owner=TEAM_OTHER (${classification.teamOtherRelation}), no requiere Work Item personal` };
   }
 
   if (duplicateCandidateIds.length > 0) {

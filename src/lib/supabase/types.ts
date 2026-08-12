@@ -223,6 +223,14 @@ export interface GmailThreadReconciliationRow {
 
 export type GmailCatchupStatus = "in_progress" | "completed" | "failed";
 
+export interface GmailCatchupFailedThread {
+  threadId: string;
+  attempts: number;
+  lastErrorClass: string;
+  firstFailedAt: string;
+  lastFailedAt: string;
+}
+
 export interface GmailCatchupStateRow {
   id: string;
   connection_id: string;
@@ -232,11 +240,19 @@ export interface GmailCatchupStateRow {
   processed_count: number;
   auto_created_count: number;
   auto_updated_count: number;
+  delegated_count: number;
+  waiting_count: number;
   no_op_count: number;
   review_count: number;
   ignored_count: number;
   rule_filtered_count: number;
   failed_count: number;
+  /** Threads que fallaron y todavia no agotaron MAX_RETRY_ATTEMPTS — el proximo lote los
+   * reintenta antes de seguir avanzando el cursor principal. */
+  failed_threads: GmailCatchupFailedThread[];
+  /** Threads que agotaron los reintentos — fuera del flujo automatico, quedan para
+   * diagnostico manual (nunca vuelven a reintentarse solos). */
+  permanently_failed_threads: GmailCatchupFailedThread[];
   target_history_id: string | null;
   started_at: string;
   updated_at: string;
@@ -390,11 +406,15 @@ type GmailCatchupStateInsert = {
   processed_count?: number;
   auto_created_count?: number;
   auto_updated_count?: number;
+  delegated_count?: number;
+  waiting_count?: number;
   no_op_count?: number;
   review_count?: number;
   ignored_count?: number;
   rule_filtered_count?: number;
   failed_count?: number;
+  failed_threads?: GmailCatchupFailedThread[];
+  permanently_failed_threads?: GmailCatchupFailedThread[];
   target_history_id?: string | null;
   started_at?: string;
   updated_at?: string;

@@ -190,6 +190,7 @@ function fakeAIProvider(result: Partial<EmailThreadResult>): AIProvider {
     relevance: "WORK",
     classification: "INFO",
     attention_owner: "FELIPE",
+    team_other_relation: null,
     next_action: null,
     waiting_for_person: null,
     waiting_for_what: null,
@@ -398,6 +399,7 @@ function logEntry(overrides: Partial<ThreadSyncLogEntry> = {}): ThreadSyncLogEnt
     confidence: "HIGH",
     isDelegation: false,
     attentionOwner: "FELIPE",
+    teamOtherRelation: null,
     action: "AUTO_CREATE",
     ...overrides,
   };

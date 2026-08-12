@@ -19,7 +19,14 @@ export const emailThreadResultSchema = z.object({
   attention_owner: z
     .enum(["FELIPE", "TEAM_OTHER", "EXTERNAL", "SHARED", "UNKNOWN"])
     .describe(
-      "A quien le corresponde la proxima accion/decision real, evaluado DESPUES de relevance y classification. FELIPE si es inequivocamente suyo, TEAM_OTHER si es de otra persona interna, EXTERNAL si se espera a un tercero (cliente/proveedor), SHARED si involucra al equipo sin responsable individual claro, UNKNOWN si no se puede determinar. Ver reglas ATTENTION_OWNER."
+      "A quien le corresponde la proxima accion/decision real, evaluado DESPUES de relevance y classification. FELIPE si es inequivocamente suyo, TEAM_OTHER si es de otra persona interna (ver team_other_relation), EXTERNAL si se espera a un tercero (cliente/proveedor), SHARED SOLO si de verdad no se puede determinar responsable individual (si Felipe tiene un pedido explicito o una parte clara dentro de un pedido grupal, attention_owner es FELIPE, no SHARED), UNKNOWN si no se puede determinar. Ver reglas ATTENTION_OWNER."
+    ),
+
+  team_other_relation: z
+    .enum(["DELEGATED_BY_FELIPE", "OWNED_BY_OTHER", "FYI_ONLY", "BLOCKS_FELIPE", "AMBIGUOUS"])
+    .nullable()
+    .describe(
+      "Solo se completa cuando attention_owner=TEAM_OTHER — null en cualquier otro caso. DELEGATED_BY_FELIPE: Felipe delego esto explicitamente. OWNED_BY_OTHER: es tarea de otra persona, sin relacion con Felipe mas alla de estar en el hilo. FYI_ONLY: Felipe solo recibe copia informativa, sin pedido/compromiso/bloqueo/delegacion pendiente. BLOCKS_FELIPE: el resultado de lo que hace la otra persona bloquea una accion posterior de Felipe. AMBIGUOUS: no se puede determinar cual de las anteriores aplica. Ver reglas TEAM_OTHER_RELATION."
     ),
 
   next_action: z.string().min(1).max(200).nullable().describe("Que tiene que hacer el usuario. Null si no aplica."),

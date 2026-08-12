@@ -9,6 +9,7 @@ function classification(overrides: Partial<ResolvedClassification> = {}): Resolv
     relevance: "WORK",
     classification: "ACTION",
     attentionOwner: "FELIPE",
+    teamOtherRelation: null,
     next_action: "Hacer algo",
     waiting_for_what: null,
     due_date: null,
@@ -433,5 +434,177 @@ describe("ATTENTION_OWNER — nunca se auto-asigna a Felipe un trabajo que no es
       lastMessageIsOutbound: false,
     });
     expect(plan.type).toBe("REVIEW_UPDATE_WORK_ITEM");
+  });
+});
+
+// Los 9 casos obligatorios del pedido "REFINAR ATTENTION OWNER SIN CONVERTIR REVIEW EN OTRA
+// INBOX": items 1-8 se prueban aca (a nivel decisionEngine, que es donde vive attentionGate).
+// Los items 9 y 10 (FAILED_RETRYABLE reingresa al proximo lote / una falla repetida no
+// entra en loop infinito) se prueban en catchup.test.ts, donde vive esa logica.
+describe("TEAM_OTHER_RELATION — refinar sin convertir Review en otra inbox (9 casos obligatorios del pedido)", () => {
+  it("1) Felipe delega explicitamente en Thomas (DELEGATED_BY_FELIPE) -> AUTO WAITING/DELEGATED, nunca Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "WAITING",
+        attentionOwner: "TEAM_OTHER",
+        teamOtherRelation: "DELEGATED_BY_FELIPE",
+        next_action: null,
+        waiting_for_what: "Que Thomas envie la cotizacion",
+        confidence: "HIGH",
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: true,
+    });
+    expect(plan.type).toBe("CREATE_WORK_ITEM");
+  });
+
+  it("1b) Delegacion explicita sobre un Work Item YA existente -> se auto-actualiza (UPDATE_WORK_ITEM_SAFE/NO_OP), nunca Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "WAITING",
+        attentionOwner: "TEAM_OTHER",
+        teamOtherRelation: "DELEGATED_BY_FELIPE",
+        next_action: null,
+        waiting_for_what: "Que Thomas envie la cotizacion",
+        confidence: "HIGH",
+      }),
+      existingWorkItem: workItem({ next_action: "Enviar cotizacion", waiting_for_what: null }),
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: true,
+    });
+    expect(plan.type).toBe("UPDATE_WORK_ITEM_SAFE");
+  });
+
+  it("2) Cliente le pide algo a Thomas directamente, Felipe solo en Cc (OWNED_BY_OTHER, sin item previo) -> IGNORE silencioso, nunca Review ni CREATE", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "ACTION",
+        attentionOwner: "TEAM_OTHER",
+        teamOtherRelation: "OWNED_BY_OTHER",
+        next_action: "Enviar propuesta tecnica",
+        confidence: "HIGH",
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("IGNORE");
+  });
+
+  it("3) Thomas responde que el se ocupa (OWNED_BY_OTHER, sobre un Work Item existente) -> NO_OP, no ACTION para Felipe, no Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "INFO",
+        attentionOwner: "TEAM_OTHER",
+        teamOtherRelation: "OWNED_BY_OTHER",
+        next_action: null,
+        confidence: "HIGH",
+      }),
+      existingWorkItem: workItem({ next_action: null }),
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("NO_OP");
+  });
+
+  it("4) Mail puramente FYI a un tercero (FYI_ONLY, sin item previo) -> IGNORE, nunca crea Work Item ni Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "INFO",
+        attentionOwner: "TEAM_OTHER",
+        teamOtherRelation: "FYI_ONLY",
+        next_action: null,
+        confidence: "HIGH",
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("IGNORE");
+  });
+
+  it("5) El trabajo de Thomas bloquea a Felipe (BLOCKS_FELIPE) -> AUTO WAITING, nunca Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "WAITING",
+        attentionOwner: "TEAM_OTHER",
+        teamOtherRelation: "BLOCKS_FELIPE",
+        next_action: null,
+        waiting_for_what: "El precio que Thomas tiene que mandar antes de poder cerrar la oferta",
+        confidence: "HIGH",
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("CREATE_WORK_ITEM");
+  });
+
+  it("6) Pedido conjunto con obligacion explicita de Felipe -> attentionOwner FELIPE (no SHARED) -> ACTION auto, nunca Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "ACTION",
+        attentionOwner: "FELIPE",
+        next_action: "Confirmar el plazo de entrega",
+        confidence: "HIGH",
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("CREATE_WORK_ITEM");
+  });
+
+  it("7) Pedido grupal generico sin responsable ('Equipo, necesitamos resolver esto hoy') -> SHARED -> Review, no se inventa responsable", () => {
+    const plan = decideAction({
+      classification: classification({ classification: "ACTION", attentionOwner: "SHARED", confidence: "HIGH" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("REVIEW_NEW_WORK_ITEM");
+  });
+
+  it("8) Personal con accion y fecha ('Pagá el trámite antes del viernes') -> relevance PERSONAL -> IGNORE, sin evidencia laboral positiva no es WORK", () => {
+    const plan = decideAction({
+      classification: classification({
+        relevance: "PERSONAL",
+        classification: "ACTION",
+        attentionOwner: "FELIPE",
+        next_action: "Pagar el tramite antes del viernes",
+        due_date: "2026-08-14",
+        confidence: "HIGH",
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("IGNORE");
+  });
+
+  it("AMBIGUOUS (no se puede determinar si es delegacion/FYI/bloqueo) -> Review, la excepcion y no la regla", () => {
+    const plan = decideAction({
+      classification: classification({
+        classification: "ACTION",
+        attentionOwner: "TEAM_OTHER",
+        teamOtherRelation: "AMBIGUOUS",
+        confidence: "HIGH",
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("REVIEW_NEW_WORK_ITEM");
   });
 });

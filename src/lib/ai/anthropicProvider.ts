@@ -70,6 +70,10 @@ const EMAIL_TOOL_INPUT_SCHEMA = {
     relevance: { type: "string", enum: ["WORK", "PERSONAL", "UNCERTAIN"] },
     classification: { type: "string", enum: ["ACTION", "WAITING", "COMMITMENT", "INFO", "IGNORE"] },
     attention_owner: { type: "string", enum: ["FELIPE", "TEAM_OTHER", "EXTERNAL", "SHARED", "UNKNOWN"] },
+    team_other_relation: {
+      type: ["string", "null"],
+      enum: ["DELEGATED_BY_FELIPE", "OWNED_BY_OTHER", "FYI_ONLY", "BLOCKS_FELIPE", "AMBIGUOUS", null],
+    },
     next_action: { type: ["string", "null"] },
     waiting_for_person: { type: ["string", "null"] },
     waiting_for_what: { type: ["string", "null"] },
@@ -94,6 +98,7 @@ const EMAIL_TOOL_INPUT_SCHEMA = {
     "relevance",
     "classification",
     "attention_owner",
+    "team_other_relation",
     "next_action",
     "waiting_for_person",
     "waiting_for_what",

@@ -73,6 +73,7 @@ async function processThreadIds(
         confidence: null,
         isDelegation: null,
         attentionOwner: null,
+        teamOtherRelation: null,
         action: "ERROR",
       });
     }

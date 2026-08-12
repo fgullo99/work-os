@@ -24,6 +24,7 @@ export interface ThreadSyncLogEntry {
   confidence: string | null;
   isDelegation: boolean | null;
   attentionOwner: string | null;
+  teamOtherRelation: string | null;
   action: string;
   /** Solo se llena cuando processThread corre desde el AI Work Manager (reconciliacion o
    * discovery, ver reconcile.ts) en vez del sync incremental normal — permite armar el
@@ -107,6 +108,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     confidence: null,
     isDelegation: null,
     attentionOwner: null,
+    teamOtherRelation: null,
     action: "",
   };
 
@@ -144,6 +146,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
   log.confidence = raw.confidence;
   log.isDelegation = raw.is_delegation;
   log.attentionOwner = raw.attention_owner;
+  log.teamOtherRelation = raw.team_other_relation;
   log.existingWorkItemId = existingWorkItem?.id ?? null;
   log.rationale = raw.rationale;
 
@@ -151,6 +154,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     relevance: raw.relevance,
     classification: raw.classification,
     attentionOwner: raw.attention_owner,
+    teamOtherRelation: raw.team_other_relation,
     next_action: raw.next_action,
     waiting_for_what: raw.waiting_for_what,
     due_date: resolveDatePhrase(raw.due_date_phrase, deps.todayISO),
@@ -382,6 +386,7 @@ function buildProposedPayload(raw: EmailThreadResult, resolved: ResolvedClassifi
     is_delegation: raw.is_delegation,
     classification: raw.classification,
     attention_owner: raw.attention_owner,
+    team_other_relation: raw.team_other_relation,
   };
 }
 

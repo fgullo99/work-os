@@ -18,19 +18,84 @@ type DB = SupabaseClient;
 export const DEFAULT_CATCHUP_BATCH_SIZE = 25;
 export const DEFAULT_CATCHUP_TIME_BUDGET_MS = 45_000;
 export const DEFAULT_CATCHUP_WINDOW_DAYS = 7;
+/** Un thread que falla se reintenta hasta esta cantidad de veces (en lotes sucesivos) antes
+ * de pasar a permanently_failed_threads — nunca reintento infinito. */
+export const MAX_RETRY_ATTEMPTS = 3;
 
-export interface CatchupBatchResult {
-  status: "in_progress" | "completed" | "failed";
-  pending: number;
-  processedThisBatch: number;
-  processedTotal: number;
+export interface FailedThreadEntry {
+  threadId: string;
+  attempts: number;
+  lastErrorClass: string;
+  firstFailedAt: string;
+  lastFailedAt: string;
+}
+
+/** Mismo desglose para el lote actual y para el acumulado del catch-up completo — nunca se
+ * devuelven mezclados (ver pedido "no mezclar acumulados con delta del lote"). */
+export interface CatchupCountsSnapshot {
+  threadsProcessed: number;
   autoCreated: number;
   autoUpdated: number;
+  /** TEAM_OTHER + DELEGATED_BY_FELIPE que se auto-aplico. */
+  delegated: number;
+  /** classification=WAITING entre los auto-aplicados (incluye EXTERNAL y BLOCKS_FELIPE). */
+  waiting: number;
   noOp: number;
-  review: number;
   ignored: number;
-  ruleFiltered: number;
+  review: number;
   failed: number;
+  ruleFiltered: number;
+}
+
+export interface CatchupBatchResult {
+  status: "in_progress" | "completed";
+  thisBatch: CatchupCountsSnapshot;
+  total: CatchupCountsSnapshot & { pending: number; queueLength: number };
+  /** Threads efectivamente procesados o reintentados EN este lote — para el reporte
+   * detallado (subject/relevance/attention_owner/team_other_relation/classification/
+   * confidence/reason) que arma el caller. */
+  entries: ThreadSyncLogEntry[];
+  /** Cuantos threads quedan en la cola de reintento (todavia no agotaron MAX_RETRY_ATTEMPTS). */
+  retryableFailedCount: number;
+  /** Cuantos threads agotaron los reintentos y quedaron en estado de diagnostico manual. */
+  permanentlyFailedCount: number;
+}
+
+function emptyCounts(): CatchupCountsSnapshot {
+  return { threadsProcessed: 0, autoCreated: 0, autoUpdated: 0, delegated: 0, waiting: 0, noOp: 0, ignored: 0, review: 0, failed: 0, ruleFiltered: 0 };
+}
+
+function bumpCounts(counts: CatchupCountsSnapshot, entry: ThreadSyncLogEntry): void {
+  counts.threadsProcessed += 1;
+  switch (classifyThreadOutcome(entry)) {
+    case "AUTO_CREATED":
+      counts.autoCreated += 1;
+      break;
+    case "AUTO_UPDATED":
+      counts.autoUpdated += 1;
+      break;
+    case "NO_OP":
+      counts.noOp += 1;
+      break;
+    case "REVIEW_CREATED":
+      counts.review += 1;
+      break;
+    case "IGNORED":
+      counts.ignored += 1;
+      break;
+    case "RULE_FILTERED":
+      counts.ruleFiltered += 1;
+      break;
+    case "FAILED":
+      counts.failed += 1;
+      break;
+  }
+  if (entry.classification === "WAITING" && (entry.action === "AUTO_CREATE" || entry.action === "AUTO_UPDATE")) {
+    counts.waiting += 1;
+  }
+  if (entry.attentionOwner === "TEAM_OTHER" && entry.teamOtherRelation === "DELEGATED_BY_FELIPE" && (entry.action === "AUTO_CREATE" || entry.action === "AUTO_UPDATE")) {
+    counts.delegated += 1;
+  }
 }
 
 export async function getCatchupState(supabase: DB, connectionId: string): Promise<GmailCatchupStateRow | null> {
@@ -55,11 +120,15 @@ async function startCatchup(supabase: DB, gmail: gmail_v1.Gmail, connectionId: s
     processed_count: 0,
     auto_created_count: 0,
     auto_updated_count: 0,
+    delegated_count: 0,
+    waiting_count: 0,
     no_op_count: 0,
     review_count: 0,
     ignored_count: 0,
     rule_filtered_count: 0,
     failed_count: 0,
+    failed_threads: [] as FailedThreadEntry[],
+    permanently_failed_threads: [] as FailedThreadEntry[],
     target_history_id: targetHistoryId,
     started_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -71,49 +140,38 @@ async function startCatchup(supabase: DB, gmail: gmail_v1.Gmail, connectionId: s
   return data as GmailCatchupStateRow;
 }
 
-interface CatchupCounts {
-  processed: number;
-  autoCreated: number;
-  autoUpdated: number;
-  noOp: number;
-  review: number;
-  ignored: number;
-  ruleFiltered: number;
-  failed: number;
-}
-
-function bumpCounts(counts: CatchupCounts, entry: ThreadSyncLogEntry): void {
-  counts.processed += 1;
-  switch (classifyThreadOutcome(entry)) {
-    case "AUTO_CREATED":
-      counts.autoCreated += 1;
-      break;
-    case "AUTO_UPDATED":
-      counts.autoUpdated += 1;
-      break;
-    case "NO_OP":
-      counts.noOp += 1;
-      break;
-    case "REVIEW_CREATED":
-      counts.review += 1;
-      break;
-    case "IGNORED":
-      counts.ignored += 1;
-      break;
-    case "RULE_FILTERED":
-      counts.ruleFiltered += 1;
-      break;
-    case "FAILED":
-      counts.failed += 1;
-      break;
-  }
-}
-
 /** El catch-up termino de recorrer toda la cola: recien ahi se actualiza el cursor
  * incremental normal (google_connection.history_id) al historyId capturado al ARRANCAR. */
 async function finalizeCatchup(supabase: DB, connection: GoogleConnectionRow, targetHistoryId: string | null): Promise<void> {
   if (targetHistoryId) {
     await updateSyncCursor(supabase, connection.id, targetHistoryId);
+  }
+}
+
+function errorClassOf(err: unknown): string {
+  if (err instanceof Error) return err.name || "Error";
+  return "UnknownError";
+}
+
+interface ProcessOneResult {
+  entry: ThreadSyncLogEntry | null;
+  errorClass: string | null;
+}
+
+async function processOneThread(
+  gmail: gmail_v1.Gmail,
+  applyDeps: ApplySyncDeps,
+  userAddresses: string[],
+  threadId: string
+): Promise<ProcessOneResult> {
+  try {
+    const raw = await getThread(gmail, threadId);
+    const thread = parseThread(raw, userAddresses);
+    const entry = await processThread(applyDeps, thread);
+    return { entry, errorClass: null };
+  } catch (err) {
+    console.error(`[catchup] thread ${threadId} fallo:`, err);
+    return { entry: null, errorClass: errorClassOf(err) };
   }
 }
 
@@ -123,9 +181,16 @@ async function finalizeCatchup(supabase: DB, connection: GoogleConnectionRow, ta
  * anterior ya termino/nunca arranco), arranca uno nuevo antes de procesar. Persiste
  * cursor_index + contadores DESPUES del lote: si el proceso muere a mitad (timeout, Anthropic
  * caido), la proxima corrida sigue exactamente desde ahi — nunca reprocesa desde cero.
+ *
+ * Cada lote reintenta PRIMERO los threads en failed_threads (hasta MAX_RETRY_ATTEMPTS), antes
+ * de seguir avanzando el cursor principal — un thread que fallo por un problema transitorio
+ * (ver incidente real: bug de schema, 2 threads fallaron) vuelve a entrar solo, nunca queda
+ * saltado para siempre. Si agota los reintentos, pasa a permanently_failed_threads (fuera del
+ * flujo automatico, para diagnostico manual) — nunca loop infinito.
+ *
  * Idempotente por diseño: cada thread pasa por el mismo processThread() de siempre, que ya
- * resuelve por thread_id (findWorkItemByThreadId) — reprocesar un thread ya hecho (ej. si
- * cursor_index quedo desalineado por algun motivo) actualiza, nunca duplica.
+ * resuelve por thread_id (findWorkItemByThreadId) — reprocesar un thread ya hecho actualiza,
+ * nunca duplica.
  */
 export async function runCatchupBatch(
   supabase: DB,
@@ -144,24 +209,30 @@ export async function runCatchupBatch(
     state = await startCatchup(supabase, gmail, connection.id, days);
   }
 
-  const counts: CatchupCounts = {
-    processed: state.processed_count,
+  const totalCounts: CatchupCountsSnapshot = {
+    threadsProcessed: state.processed_count,
     autoCreated: state.auto_created_count,
     autoUpdated: state.auto_updated_count,
+    delegated: state.delegated_count,
+    waiting: state.waiting_count,
     noOp: state.no_op_count,
     review: state.review_count,
     ignored: state.ignored_count,
     ruleFiltered: state.rule_filtered_count,
     failed: state.failed_count,
   };
+  const batchCounts = emptyCounts();
+  const batchEntries: ThreadSyncLogEntry[] = [];
+  let failedThreads: FailedThreadEntry[] = [...(state.failed_threads ?? [])];
+  const permanentlyFailedThreads: FailedThreadEntry[] = [...(state.permanently_failed_threads ?? [])];
 
-  if (state.thread_queue.length === 0) {
+  if (state.thread_queue.length === 0 && failedThreads.length === 0) {
     await finalizeCatchup(supabase, connection, state.target_history_id);
     await supabase
       .from("gmail_catchup_state")
       .update({ status: "completed", updated_at: new Date().toISOString(), completed_at: new Date().toISOString() })
       .eq("connection_id", connection.id);
-    return { status: "completed", pending: 0, processedThisBatch: 0, processedTotal: counts.processed, ...countsToResult(counts) };
+    return buildResult("completed", batchCounts, totalCounts, batchEntries, state.thread_queue.length, state.cursor_index, failedThreads, permanentlyFailedThreads);
   }
 
   const userAddresses = getUserAddresses();
@@ -170,43 +241,78 @@ export async function runCatchupBatch(
   const applyDeps: ApplySyncDeps = { supabase, aiProvider, todayISO, safeMode: connection.safe_mode, userAddresses };
 
   const startedAt = Date.now();
-  let cursorIndex = state.cursor_index;
   let processedThisBatch = 0;
+  const withinBudget = () => processedThisBatch < batchSize && Date.now() - startedAt < timeBudgetMs;
 
-  while (cursorIndex < state.thread_queue.length && processedThisBatch < batchSize && Date.now() - startedAt < timeBudgetMs) {
+  // --- 1. Reintentar primero los threads en la cola de reintento ---
+  const stillFailedThreads: FailedThreadEntry[] = [];
+  for (const failedEntry of failedThreads) {
+    if (!withinBudget()) {
+      stillFailedThreads.push(failedEntry);
+      continue;
+    }
+    const { entry, errorClass } = await processOneThread(gmail, applyDeps, userAddresses, failedEntry.threadId);
+    processedThisBatch += 1;
+    if (entry) {
+      bumpCounts(totalCounts, entry);
+      bumpCounts(batchCounts, entry);
+      batchEntries.push(entry);
+      // se recupero — sale de la cola de reintento sin pasar a permanent.
+    } else {
+      const attempts = failedEntry.attempts + 1;
+      const nowISO = new Date().toISOString();
+      if (attempts >= MAX_RETRY_ATTEMPTS) {
+        permanentlyFailedThreads.push({ ...failedEntry, attempts, lastErrorClass: errorClass ?? "UnknownError", lastFailedAt: nowISO });
+      } else {
+        stillFailedThreads.push({ ...failedEntry, attempts, lastErrorClass: errorClass ?? "UnknownError", lastFailedAt: nowISO });
+      }
+      totalCounts.failed += 1;
+      batchCounts.failed += 1;
+    }
+  }
+  failedThreads = stillFailedThreads;
+
+  // --- 2. Continuar la cola principal desde cursor_index ---
+  let cursorIndex = state.cursor_index;
+  while (cursorIndex < state.thread_queue.length && withinBudget()) {
     const threadId = state.thread_queue[cursorIndex];
     if (!threadId) {
       cursorIndex += 1;
       continue;
     }
-    try {
-      const raw = await getThread(gmail, threadId);
-      const thread = parseThread(raw, userAddresses);
-      const entry = await processThread(applyDeps, thread);
-      bumpCounts(counts, entry);
-    } catch (err) {
-      console.error(`[catchup] thread ${threadId} fallo:`, err);
-      counts.failed += 1;
-      counts.processed += 1;
+    const { entry, errorClass } = await processOneThread(gmail, applyDeps, userAddresses, threadId);
+    processedThisBatch += 1;
+    if (entry) {
+      bumpCounts(totalCounts, entry);
+      bumpCounts(batchCounts, entry);
+      batchEntries.push(entry);
+    } else {
+      const nowISO = new Date().toISOString();
+      failedThreads.push({ threadId, attempts: 1, lastErrorClass: errorClass ?? "UnknownError", firstFailedAt: nowISO, lastFailedAt: nowISO });
+      totalCounts.failed += 1;
+      batchCounts.failed += 1;
     }
     cursorIndex += 1;
-    processedThisBatch += 1;
   }
 
-  const completed = cursorIndex >= state.thread_queue.length;
+  const completed = cursorIndex >= state.thread_queue.length && failedThreads.length === 0;
 
   const { error: updateError } = await supabase
     .from("gmail_catchup_state")
     .update({
       cursor_index: cursorIndex,
-      processed_count: counts.processed,
-      auto_created_count: counts.autoCreated,
-      auto_updated_count: counts.autoUpdated,
-      no_op_count: counts.noOp,
-      review_count: counts.review,
-      ignored_count: counts.ignored,
-      rule_filtered_count: counts.ruleFiltered,
-      failed_count: counts.failed,
+      processed_count: totalCounts.threadsProcessed,
+      auto_created_count: totalCounts.autoCreated,
+      auto_updated_count: totalCounts.autoUpdated,
+      delegated_count: totalCounts.delegated,
+      waiting_count: totalCounts.waiting,
+      no_op_count: totalCounts.noOp,
+      review_count: totalCounts.review,
+      ignored_count: totalCounts.ignored,
+      rule_filtered_count: totalCounts.ruleFiltered,
+      failed_count: totalCounts.failed,
+      failed_threads: failedThreads,
+      permanently_failed_threads: permanentlyFailedThreads,
       status: completed ? "completed" : "in_progress",
       updated_at: new Date().toISOString(),
       completed_at: completed ? new Date().toISOString() : null,
@@ -218,23 +324,34 @@ export async function runCatchupBatch(
     await finalizeCatchup(supabase, connection, state.target_history_id);
   }
 
-  return {
-    status: completed ? "completed" : "in_progress",
-    pending: state.thread_queue.length - cursorIndex,
-    processedThisBatch,
-    processedTotal: counts.processed,
-    ...countsToResult(counts),
-  };
+  return buildResult(
+    completed ? "completed" : "in_progress",
+    batchCounts,
+    totalCounts,
+    batchEntries,
+    state.thread_queue.length,
+    cursorIndex,
+    failedThreads,
+    permanentlyFailedThreads
+  );
 }
 
-function countsToResult(counts: CatchupCounts): Omit<CatchupBatchResult, "status" | "pending" | "processedThisBatch" | "processedTotal"> {
+function buildResult(
+  status: "in_progress" | "completed",
+  batchCounts: CatchupCountsSnapshot,
+  totalCounts: CatchupCountsSnapshot,
+  entries: ThreadSyncLogEntry[],
+  queueLength: number,
+  cursorIndex: number,
+  failedThreads: FailedThreadEntry[],
+  permanentlyFailedThreads: FailedThreadEntry[]
+): CatchupBatchResult {
   return {
-    autoCreated: counts.autoCreated,
-    autoUpdated: counts.autoUpdated,
-    noOp: counts.noOp,
-    review: counts.review,
-    ignored: counts.ignored,
-    ruleFiltered: counts.ruleFiltered,
-    failed: counts.failed,
+    status,
+    thisBatch: batchCounts,
+    total: { ...totalCounts, pending: queueLength - cursorIndex + failedThreads.length, queueLength },
+    entries,
+    retryableFailedCount: failedThreads.length,
+    permanentlyFailedCount: permanentlyFailedThreads.length,
   };
 }

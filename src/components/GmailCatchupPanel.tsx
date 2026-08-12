@@ -9,11 +9,15 @@ interface CatchupStateView {
   processed_count: number;
   auto_created_count: number;
   auto_updated_count: number;
+  delegated_count: number;
+  waiting_count: number;
   no_op_count: number;
   review_count: number;
   ignored_count: number;
   rule_filtered_count: number;
   failed_count: number;
+  failed_threads: unknown[];
+  permanently_failed_threads: unknown[];
   started_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -65,8 +69,12 @@ export function GmailCatchupPanel() {
 
   if (!checkedOnce) return null;
 
-  const pending = state ? state.thread_queue.length - state.cursor_index : 0;
-  const isCompleted = state?.status === "completed" && pending === 0;
+  const pending = state ? state.thread_queue.length - state.cursor_index + state.failed_threads.length : 0;
+  // el backend ya solo marca "completed" cuando la cola principal Y la cola de reintento
+  // (failed_threads) estan vacias — ver runCatchupBatch en src/lib/gmail/catchup.ts.
+  const isCompleted = state?.status === "completed";
+  const retrying = state?.failed_threads.length ?? 0;
+  const permanentlyFailed = state?.permanently_failed_threads.length ?? 0;
 
   return (
     <section className="card p-5">
@@ -98,8 +106,12 @@ export function GmailCatchupPanel() {
           <div>Failed: {state.failed_count}</div>
           <div>Auto created: {state.auto_created_count}</div>
           <div>Auto updated: {state.auto_updated_count}</div>
+          <div>Delegated: {state.delegated_count}</div>
+          <div>Waiting: {state.waiting_count}</div>
           <div>No-op: {state.no_op_count}</div>
           <div>Ignored: {state.ignored_count}</div>
+          <div>Retrying: {retrying}</div>
+          <div>Failed permanente: {permanentlyFailed}</div>
         </div>
       )}
 

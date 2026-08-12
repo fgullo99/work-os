@@ -119,6 +119,7 @@ function defaultEmailResult(overrides: Partial<EmailThreadResult>): EmailThreadR
     relevance: "WORK",
     classification: "INFO",
     attention_owner: "FELIPE",
+    team_other_relation: null,
     next_action: null,
     waiting_for_person: null,
     waiting_for_what: null,
@@ -212,8 +213,8 @@ describe("runCatchupBatch — acotado, resumible, idempotente", () => {
     const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 3, timeBudgetMs: 60_000 });
 
     expect(result.status).toBe("in_progress");
-    expect(result.processedThisBatch).toBe(3);
-    expect(result.pending).toBe(2);
+    expect(result.thisBatch.threadsProcessed).toBe(3);
+    expect(result.total.pending).toBe(2);
 
     const state = supabase.tables.gmail_catchup_state![0]!;
     expect(state.cursor_index).toBe(3);
@@ -239,7 +240,7 @@ describe("runCatchupBatch — acotado, resumible, idempotente", () => {
     const result2 = await runCatchupBatch(supabase as any, connection(), { batchSize: 3, timeBudgetMs: 60_000 });
 
     expect(result2.status).toBe("completed");
-    expect(result2.pending).toBe(0);
+    expect(result2.total.pending).toBe(0);
     expect(processedThreadIds).toEqual(["t-0", "t-1", "t-2", "t-3", "t-4"]);
     expect(new Set(processedThreadIds).size).toBe(5); // ninguno se proceso dos veces
 
@@ -255,10 +256,10 @@ describe("runCatchupBatch — acotado, resumible, idempotente", () => {
     const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
 
     expect(result.status).toBe("completed");
-    expect(result.processedTotal).toBe(0);
+    expect(result.total.threadsProcessed).toBe(0);
   });
 
-  it("un thread que falla (la IA tira error) cuenta como failed y el cursor sigue avanzando (no se cuelga)", async () => {
+  it("un thread que falla (la IA tira error) cuenta como failed, el cursor sigue avanzando (no se cuelga), y queda en la cola de reintento — no se marca completed hasta que se resuelva", async () => {
     const threadIds = ["t-ok", "t-fail"];
     gmailRef.current = makeFakeGmail(threadIds);
     providerRef.current = {
@@ -271,8 +272,49 @@ describe("runCatchupBatch — acotado, resumible, idempotente", () => {
     const supabase = makeFakeSupabase({ gmail_catchup_state: [], google_connection: [connection() as unknown as Row] });
     const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
 
-    expect(result.status).toBe("completed");
-    expect(result.failed).toBe(1);
-    expect(result.pending).toBe(0);
+    // el cursor ya recorrio toda la cola (no se cuelga), pero como t-fail sigue en la
+    // cola de reintento, el catch-up no se da por completado todavia
+    expect(result.status).toBe("in_progress");
+    expect(result.thisBatch.failed).toBe(1);
+    expect(result.retryableFailedCount).toBe(1);
+    expect(result.permanentlyFailedCount).toBe(0);
+    expect(result.total.pending).toBe(1);
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    expect(state.cursor_index).toBe(2);
+  });
+
+  it("un thread que falla repetidamente se reintenta primero en cada lote y, tras agotar los intentos, pasa a permanently_failed sin loop infinito", async () => {
+    const threadIds = ["t-fail"];
+    gmailRef.current = makeFakeGmail(threadIds);
+    providerRef.current = {
+      normalizeEmailThread: async () => {
+        throw new Error("boom");
+      },
+    } as unknown as AIProvider;
+
+    const supabase = makeFakeSupabase({ gmail_catchup_state: [], google_connection: [connection() as unknown as Row] });
+
+    const r1 = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+    expect(r1.status).toBe("in_progress");
+    expect(r1.retryableFailedCount).toBe(1);
+    expect(r1.permanentlyFailedCount).toBe(0);
+
+    const r2 = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+    expect(r2.status).toBe("in_progress");
+    expect(r2.retryableFailedCount).toBe(1);
+    expect(r2.permanentlyFailedCount).toBe(0);
+
+    const r3 = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+    // tercer intento agota MAX_RETRY_ATTEMPTS (3): se mueve a permanently_failed y,
+    // al no quedar nada pendiente, el catch-up se completa (no queda colgado para siempre)
+    expect(r3.status).toBe("completed");
+    expect(r3.retryableFailedCount).toBe(0);
+    expect(r3.permanentlyFailedCount).toBe(1);
+    expect(r3.total.pending).toBe(0);
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    expect((state.permanently_failed_threads as unknown[]).length).toBe(1);
+    expect((state.failed_threads as unknown[]).length).toBe(0);
   });
 });
