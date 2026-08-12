@@ -3,7 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { getActiveConnection } from "@/lib/google/connection";
 import { getConnectionOrThrow } from "@/lib/gmail/sync";
-import { getCatchupState, runCatchupBatch } from "@/lib/gmail/catchup";
+import { getCatchupState, runCatchupBatch, CatchupLockError } from "@/lib/gmail/catchup";
 
 // Un lote real (25 threads, ~45s de presupuesto) puede acercarse al limite default de 10s —
 // mismo motivo que /api/gmail/sync.
@@ -44,6 +44,9 @@ export async function POST() {
     const result = await runCatchupBatch(supabase, connection);
     return NextResponse.json({ ok: true, result });
   } catch (err) {
+    if (err instanceof CatchupLockError) {
+      return NextResponse.json({ ok: false, error: "CATCHUP_ALREADY_RUNNING" }, { status: 409 });
+    }
     console.error("[gmail catchup run]", err);
     return NextResponse.json({ ok: false, error: "catchup_failed" }, { status: 500 });
   }

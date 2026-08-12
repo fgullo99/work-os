@@ -10,6 +10,7 @@ import { buildThreadContextText } from "@/lib/gmail/contextWindow";
 import { buildWhatsAppContextText } from "@/lib/whatsapp/whatsappContext";
 import {
   AINormalizationError,
+  type AiUsage,
   type AIProvider,
   type NormalizeEmailThreadInput,
   type NormalizeManualCaptureInput,
@@ -189,6 +190,8 @@ export class AnthropicProvider implements AIProvider {
     toolDescription: string;
     toolInputSchema: unknown;
     zodSchema: ZodType<T>;
+    /** Puramente informativo (telemetria de costo) — nunca afecta el resultado. */
+    onUsage?: (usage: AiUsage) => void;
   }): Promise<T> {
     const attempt = async (extraNote?: string) => {
       // El request se tipa como `any` a proposito: el shape exacto de `tools[].input_schema`
@@ -214,6 +217,13 @@ export class AnthropicProvider implements AIProvider {
         tool_choice: { type: "tool", name: params.toolName },
       };
       const message = await this.client.messages.create(requestParams);
+
+      if (params.onUsage && message.usage) {
+        params.onUsage({
+          inputTokens: message.usage.input_tokens ?? 0,
+          outputTokens: message.usage.output_tokens ?? 0,
+        });
+      }
 
       const toolUse = message.content.find((block: { type: string }) => block.type === "tool_use");
       if (!toolUse || toolUse.type !== "tool_use") {
@@ -247,7 +257,7 @@ export class AnthropicProvider implements AIProvider {
     throw new AINormalizationError("El modelo no devolvio una estructura valida despues de reintentar.", retryParsed.error);
   }
 
-  async normalizeManualCapture(input: NormalizeManualCaptureInput): Promise<ManualCaptureResult> {
+  async normalizeManualCapture(input: NormalizeManualCaptureInput, onUsage?: (usage: AiUsage) => void): Promise<ManualCaptureResult> {
     return this.callToolWithRetry({
       system: buildManualCaptureSystemPrompt(input.currentDateISO),
       userContent: input.text,
@@ -255,10 +265,11 @@ export class AnthropicProvider implements AIProvider {
       toolDescription: "Registra la clasificacion estructurada del texto de captura manual.",
       toolInputSchema: MANUAL_TOOL_INPUT_SCHEMA,
       zodSchema: manualCaptureResultSchema,
+      onUsage,
     });
   }
 
-  async normalizeEmailThread(input: NormalizeEmailThreadInput): Promise<EmailThreadResult> {
+  async normalizeEmailThread(input: NormalizeEmailThreadInput, onUsage?: (usage: AiUsage) => void): Promise<EmailThreadResult> {
     const contextText = buildThreadContextText(input.thread, input.existingWorkItem, input.userAddresses);
     return this.callToolWithRetry({
       system: buildEmailThreadSystemPrompt(input.currentDateISO),
@@ -267,10 +278,14 @@ export class AnthropicProvider implements AIProvider {
       toolDescription: "Registra la clasificacion estructurada del thread de Gmail.",
       toolInputSchema: EMAIL_TOOL_INPUT_SCHEMA,
       zodSchema: emailThreadResultSchema,
+      onUsage,
     });
   }
 
-  async normalizeWhatsAppConversation(input: NormalizeWhatsAppConversationInput): Promise<WhatsAppConversationResult> {
+  async normalizeWhatsAppConversation(
+    input: NormalizeWhatsAppConversationInput,
+    onUsage?: (usage: AiUsage) => void
+  ): Promise<WhatsAppConversationResult> {
     const contextText = buildWhatsAppContextText(input.unit, input.existingWorkItem);
     return this.callToolWithRetry({
       system: buildWhatsAppConversationSystemPrompt(input.currentDateISO),
@@ -279,6 +294,7 @@ export class AnthropicProvider implements AIProvider {
       toolDescription: "Registra la clasificacion estructurada de la conversacion de WhatsApp.",
       toolInputSchema: WHATSAPP_TOOL_INPUT_SCHEMA,
       zodSchema: whatsappConversationResultSchema,
+      onUsage,
     });
   }
 }

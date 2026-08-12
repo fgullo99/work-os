@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { runCatchupBatch } from "./catchup";
+import { runCatchupBatch, manualRequeueFailedThread, CatchupLockError, CATCHUP_LOCK_TTL_MS } from "./catchup";
 import type { GoogleConnectionRow } from "@/lib/supabase/types";
-import type { AIProvider, EmailThreadResult } from "@/lib/ai";
+import type { AIProvider, AiUsage, EmailThreadResult } from "@/lib/ai";
 
 const gmailRef: { current: any } = { current: null };
 const providerRef: { current: AIProvider } = {
@@ -316,5 +316,276 @@ describe("runCatchupBatch — acotado, resumible, idempotente", () => {
     const state = supabase.tables.gmail_catchup_state![0]!;
     expect((state.permanently_failed_threads as unknown[]).length).toBe(1);
     expect((state.failed_threads as unknown[]).length).toBe(0);
+  });
+});
+
+describe("lock server-side contra doble worker", () => {
+  it("una segunda ejecucion mientras el lock esta activo (reciente) tira CatchupLockError", async () => {
+    const threadIds = ["t-0", "t-1"];
+    gmailRef.current = makeFakeGmail(threadIds);
+    providerRef.current = { normalizeEmailThread: async () => defaultEmailResult({}) } as unknown as AIProvider;
+
+    const supabase = makeFakeSupabase({
+      gmail_catchup_state: [
+        {
+          connection_id: "conn-1",
+          status: "in_progress",
+          thread_queue: threadIds,
+          cursor_index: 0,
+          processed_count: 0,
+          auto_created_count: 0,
+          auto_updated_count: 0,
+          delegated_count: 0,
+          waiting_count: 0,
+          no_op_count: 0,
+          review_count: 0,
+          ignored_count: 0,
+          rule_filtered_count: 0,
+          failed_count: 0,
+          failed_threads: [],
+          permanently_failed_threads: [],
+          target_history_id: "h100",
+          worker_locked_at: new Date().toISOString(),
+          worker_id: "otro-worker",
+          ai_calls_count: 0,
+          ai_input_tokens: 0,
+          ai_output_tokens: 0,
+          started_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          completed_at: null,
+        },
+      ],
+      google_connection: [connection() as unknown as Row],
+    });
+
+    await expect(runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 })).rejects.toThrow(CatchupLockError);
+  });
+
+  it("un lock viejo (mas de CATCHUP_LOCK_TTL_MS) se considera expirado y no bloquea", async () => {
+    const threadIds = ["t-0", "t-1"];
+    gmailRef.current = makeFakeGmail(threadIds);
+    providerRef.current = { normalizeEmailThread: async () => defaultEmailResult({}) } as unknown as AIProvider;
+
+    const staleLockAt = new Date(Date.now() - CATCHUP_LOCK_TTL_MS - 5_000).toISOString();
+    const supabase = makeFakeSupabase({
+      gmail_catchup_state: [
+        {
+          connection_id: "conn-1",
+          status: "in_progress",
+          thread_queue: threadIds,
+          cursor_index: 0,
+          processed_count: 0,
+          auto_created_count: 0,
+          auto_updated_count: 0,
+          delegated_count: 0,
+          waiting_count: 0,
+          no_op_count: 0,
+          review_count: 0,
+          ignored_count: 0,
+          rule_filtered_count: 0,
+          failed_count: 0,
+          failed_threads: [],
+          permanently_failed_threads: [],
+          target_history_id: "h100",
+          worker_locked_at: staleLockAt,
+          worker_id: "worker-que-murio",
+          ai_calls_count: 0,
+          ai_input_tokens: 0,
+          ai_output_tokens: 0,
+          started_at: staleLockAt,
+          updated_at: staleLockAt,
+          completed_at: null,
+        },
+      ],
+      google_connection: [connection() as unknown as Row],
+    });
+
+    const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+    expect(result.status).toBe("completed");
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    // el lock se libera al terminar — nunca queda tomado para siempre.
+    expect(state.worker_locked_at).toBeNull();
+    expect(state.worker_id).toBeNull();
+  });
+
+  it("el lock se libera incluso si el batch termina en el early-return de cola vacia", async () => {
+    gmailRef.current = makeFakeGmail([]);
+    providerRef.current = { normalizeEmailThread: async () => defaultEmailResult({}) } as unknown as AIProvider;
+
+    const supabase = makeFakeSupabase({ gmail_catchup_state: [], google_connection: [connection() as unknown as Row] });
+    await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    expect(state.worker_locked_at).toBeNull();
+    expect(state.worker_id).toBeNull();
+  });
+});
+
+describe("manualRequeueFailedThread — recuperar threads fallidos antes de que existiera failed_threads", () => {
+  it("agrega el thread a failed_threads con attempts=0 para que el proximo lote lo reintente primero", async () => {
+    const supabase = makeFakeSupabase({
+      gmail_catchup_state: [
+        {
+          connection_id: "conn-1",
+          status: "in_progress",
+          thread_queue: ["t-a", "t-b"],
+          cursor_index: 2,
+          processed_count: 2,
+          auto_created_count: 0,
+          auto_updated_count: 0,
+          delegated_count: 0,
+          waiting_count: 0,
+          no_op_count: 0,
+          review_count: 0,
+          ignored_count: 0,
+          rule_filtered_count: 0,
+          failed_count: 2,
+          failed_threads: [],
+          permanently_failed_threads: [],
+          target_history_id: "h1",
+          worker_locked_at: null,
+          worker_id: null,
+          ai_calls_count: 0,
+          ai_input_tokens: 0,
+          ai_output_tokens: 0,
+          started_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          completed_at: null,
+        },
+      ],
+    });
+
+    await manualRequeueFailedThread(supabase as any, "conn-1", "19ff6b03c397a27d", "ZodError attention_owner Required (bug historico, ya corregido)");
+    await manualRequeueFailedThread(supabase as any, "conn-1", "19ff6a4988250a14", "ZodError attention_owner Required (bug historico, ya corregido)");
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    const failed = state.failed_threads as Array<{ threadId: string; attempts: number }>;
+    expect(failed.map((f) => f.threadId).sort()).toEqual(["19ff6a4988250a14", "19ff6b03c397a27d"].sort());
+    expect(failed.every((f) => f.attempts === 0)).toBe(true);
+  });
+
+  it("es idempotente: requeue dos veces el mismo threadId no lo duplica", async () => {
+    const supabase = makeFakeSupabase({
+      gmail_catchup_state: [
+        {
+          connection_id: "conn-1",
+          status: "in_progress",
+          thread_queue: [],
+          cursor_index: 0,
+          processed_count: 0,
+          auto_created_count: 0,
+          auto_updated_count: 0,
+          delegated_count: 0,
+          waiting_count: 0,
+          no_op_count: 0,
+          review_count: 0,
+          ignored_count: 0,
+          rule_filtered_count: 0,
+          failed_count: 0,
+          failed_threads: [],
+          permanently_failed_threads: [],
+          target_history_id: null,
+          worker_locked_at: null,
+          worker_id: null,
+          ai_calls_count: 0,
+          ai_input_tokens: 0,
+          ai_output_tokens: 0,
+          started_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          completed_at: null,
+        },
+      ],
+    });
+
+    await manualRequeueFailedThread(supabase as any, "conn-1", "t-dup", "nota");
+    await manualRequeueFailedThread(supabase as any, "conn-1", "t-dup", "nota");
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    expect((state.failed_threads as unknown[]).length).toBe(1);
+  });
+
+  it("si el thread estaba en permanently_failed_threads, el requeue lo saca de ahi y lo vuelve a poner en failed_threads", async () => {
+    const supabase = makeFakeSupabase({
+      gmail_catchup_state: [
+        {
+          connection_id: "conn-1",
+          status: "in_progress",
+          thread_queue: [],
+          cursor_index: 0,
+          processed_count: 0,
+          auto_created_count: 0,
+          auto_updated_count: 0,
+          delegated_count: 0,
+          waiting_count: 0,
+          no_op_count: 0,
+          review_count: 0,
+          ignored_count: 0,
+          rule_filtered_count: 0,
+          failed_count: 0,
+          failed_threads: [],
+          permanently_failed_threads: [
+            { threadId: "t-perm", attempts: 3, lastErrorClass: "AINormalizationError", firstFailedAt: "2026-08-01T00:00:00.000Z", lastFailedAt: "2026-08-01T00:00:00.000Z" },
+          ],
+          target_history_id: null,
+          worker_locked_at: null,
+          worker_id: null,
+          ai_calls_count: 0,
+          ai_input_tokens: 0,
+          ai_output_tokens: 0,
+          started_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          completed_at: null,
+        },
+      ],
+    });
+
+    await manualRequeueFailedThread(supabase as any, "conn-1", "t-perm", "reintento manual explicito");
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    expect((state.permanently_failed_threads as unknown[]).length).toBe(0);
+    const failed = state.failed_threads as Array<{ threadId: string; attempts: number }>;
+    expect(failed).toEqual([expect.objectContaining({ threadId: "t-perm", attempts: 0 })]);
+  });
+
+  it("tira si no existe gmail_catchup_state para esa conexion (no inventa un requeue a ciegas)", async () => {
+    const supabase = makeFakeSupabase({ gmail_catchup_state: [] });
+    await expect(manualRequeueFailedThread(supabase as any, "conn-inexistente", "t-x", "nota")).rejects.toThrow();
+  });
+});
+
+describe("telemetria de costo (AI calls / tokens) — opcional, no afecta el resultado", () => {
+  it("agrega las llamadas y tokens reportados por el provider a thisBatch.aiUsage y total.aiUsage, y los persiste", async () => {
+    const threadIds = ["t-0", "t-1"];
+    gmailRef.current = makeFakeGmail(threadIds);
+    providerRef.current = {
+      normalizeEmailThread: async (_input: any, onUsage?: (usage: AiUsage) => void) => {
+        onUsage?.({ inputTokens: 1000, outputTokens: 200 });
+        return defaultEmailResult({});
+      },
+    } as unknown as AIProvider;
+
+    const supabase = makeFakeSupabase({ gmail_catchup_state: [], google_connection: [connection() as unknown as Row] });
+    const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+
+    expect(result.thisBatch.aiUsage).toEqual({ calls: 2, inputTokens: 2000, outputTokens: 400 });
+    expect(result.total.aiUsage).toEqual({ calls: 2, inputTokens: 2000, outputTokens: 400 });
+    expect(typeof result.thisBatch.durationMs).toBe("number");
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    expect(state.ai_calls_count).toBe(2);
+    expect(state.ai_input_tokens).toBe(2000);
+    expect(state.ai_output_tokens).toBe(400);
+  });
+
+  it("un provider que nunca llama a onUsage (fake generico) deja aiUsage en cero sin romper nada", async () => {
+    const threadIds = ["t-0"];
+    gmailRef.current = makeFakeGmail(threadIds);
+    providerRef.current = { normalizeEmailThread: async () => defaultEmailResult({}) } as unknown as AIProvider;
+
+    const supabase = makeFakeSupabase({ gmail_catchup_state: [], google_connection: [connection() as unknown as Row] });
+    const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+
+    expect(result.thisBatch.aiUsage).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0 });
   });
 });

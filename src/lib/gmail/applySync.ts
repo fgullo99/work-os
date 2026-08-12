@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AiConfidence, ReviewItemKind, WorkItemRow } from "@/lib/supabase/types";
-import type { AIProvider, EmailThreadResult } from "@/lib/ai";
+import type { AIProvider, AiUsage, EmailThreadResult } from "@/lib/ai";
 import type { NormalizedMessage, NormalizedThread } from "./types";
 import { applyRuleFilter } from "./ruleFilter";
 import { findDuplicateCandidates, findWorkItemByThreadId } from "./workItemMatch";
@@ -47,6 +47,9 @@ export interface ApplySyncDeps {
   /** Direcciones de la cuenta conectada — se le pasan al Normalizer para que pueda comparar
    * contra To/Cc de cada mensaje y determinar attention_owner (ver emailPrompt.ts). */
   userAddresses: string[];
+  /** Puramente informativo (telemetria de costo, ver catchup.ts) — opcional, nunca afecta el
+   * resultado del procesamiento. */
+  onAiUsage?: (usage: AiUsage) => void;
 }
 
 export interface AutomationGateContext {
@@ -139,7 +142,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
       : null,
     currentDateISO: deps.todayISO,
     userAddresses: deps.userAddresses,
-  });
+  }, deps.onAiUsage);
 
   log.relevance = raw.relevance;
   log.classification = raw.classification;

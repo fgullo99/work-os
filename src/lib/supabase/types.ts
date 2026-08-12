@@ -254,6 +254,14 @@ export interface GmailCatchupStateRow {
    * diagnostico manual (nunca vuelven a reintentarse solos). */
   permanently_failed_threads: GmailCatchupFailedThread[];
   target_history_id: string | null;
+  /** Lock simple contra doble worker — ver CATCHUP_LOCK_TTL_MS en catchup.ts. Expira solo,
+   * nunca queda eterno. */
+  worker_locked_at: string | null;
+  worker_id: string | null;
+  /** Telemetria de costo acumulada — solo metricas, nunca contenido de los threads. */
+  ai_calls_count: number;
+  ai_input_tokens: number;
+  ai_output_tokens: number;
   started_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -416,6 +424,11 @@ type GmailCatchupStateInsert = {
   failed_threads?: GmailCatchupFailedThread[];
   permanently_failed_threads?: GmailCatchupFailedThread[];
   target_history_id?: string | null;
+  worker_locked_at?: string | null;
+  worker_id?: string | null;
+  ai_calls_count?: number;
+  ai_input_tokens?: number;
+  ai_output_tokens?: number;
   started_at?: string;
   updated_at?: string;
   completed_at?: string | null;

@@ -30,6 +30,13 @@ export interface NormalizeWhatsAppConversationInput {
   currentDateISO: string;
 }
 
+/** Tokens de una sola llamada al modelo — para telemetria de costo (ver catchup.ts). Nunca
+ * incluye contenido, solo conteos que ya devuelve el proveedor. */
+export interface AiUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 /**
  * Interfaz que debe implementar cualquier proveedor de IA usado por el Normalizer.
  * Todo el resto de la aplicacion depende SOLO de esta interfaz, nunca de un SDK
@@ -37,9 +44,11 @@ export interface NormalizeWhatsAppConversationInput {
  * implemente y apuntar el factory (./index.ts) a ella.
  */
 export interface AIProvider {
-  normalizeManualCapture(input: NormalizeManualCaptureInput): Promise<ManualCaptureResult>;
-  normalizeEmailThread(input: NormalizeEmailThreadInput): Promise<EmailThreadResult>;
-  normalizeWhatsAppConversation(input: NormalizeWhatsAppConversationInput): Promise<WhatsAppConversationResult>;
+  /** onUsage es opcional y puramente informativo (telemetria de costo) — ningun llamador
+   * existente necesita pasarlo, y ninguna decision de negocio depende de el. */
+  normalizeManualCapture(input: NormalizeManualCaptureInput, onUsage?: (usage: AiUsage) => void): Promise<ManualCaptureResult>;
+  normalizeEmailThread(input: NormalizeEmailThreadInput, onUsage?: (usage: AiUsage) => void): Promise<EmailThreadResult>;
+  normalizeWhatsAppConversation(input: NormalizeWhatsAppConversationInput, onUsage?: (usage: AiUsage) => void): Promise<WhatsAppConversationResult>;
   /** Nombre real del modelo configurado — solo para paneles informativos (Settings → AI Engine). */
   getModel(): string;
 }

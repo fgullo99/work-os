@@ -3,6 +3,7 @@ import type { AIProvider } from "./types";
 
 export type {
   AIProvider,
+  AiUsage,
   NormalizeManualCaptureInput,
   NormalizeEmailThreadInput,
   NormalizeWhatsAppConversationInput,
