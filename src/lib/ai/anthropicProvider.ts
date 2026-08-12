@@ -67,6 +67,7 @@ const MANUAL_TOOL_INPUT_SCHEMA = {
 const EMAIL_TOOL_INPUT_SCHEMA = {
   type: "object",
   properties: {
+    relevance: { type: "string", enum: ["WORK", "PERSONAL", "UNCERTAIN"] },
     classification: { type: "string", enum: ["ACTION", "WAITING", "COMMITMENT", "INFO", "IGNORE"] },
     next_action: { type: ["string", "null"] },
     waiting_for_person: { type: ["string", "null"] },
@@ -89,6 +90,7 @@ const EMAIL_TOOL_INPUT_SCHEMA = {
     summary: { type: "string" },
   },
   required: [
+    "relevance",
     "classification",
     "next_action",
     "waiting_for_person",
@@ -112,6 +114,7 @@ const EMAIL_TOOL_INPUT_SCHEMA = {
 const WHATSAPP_TOOL_INPUT_SCHEMA = {
   type: "object",
   properties: {
+    relevance: { type: "string", enum: ["WORK", "PERSONAL", "UNCERTAIN"] },
     classification: { type: "string", enum: ["ACTION", "WAITING", "COMMITMENT", "INFO", "IGNORE"] },
     next_action: { type: ["string", "null"] },
     waiting_for_person: { type: ["string", "null"] },
@@ -133,6 +136,7 @@ const WHATSAPP_TOOL_INPUT_SCHEMA = {
     summary: { type: "string" },
   },
   required: [
+    "relevance",
     "classification",
     "next_action",
     "waiting_for_person",

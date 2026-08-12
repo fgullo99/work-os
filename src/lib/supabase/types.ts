@@ -181,6 +181,31 @@ export interface WhatsAppIngestionRow {
   processed_at: string | null;
 }
 
+export interface AutomationSettingsRow {
+  id: string;
+  whatsapp_auto_enabled: boolean;
+  min_confidence: string;
+  updated_at: string;
+}
+
+export type AiActionSourceType = "GMAIL" | "WHATSAPP";
+export type AiActionType = "CREATE" | "UPDATE";
+
+export interface AiActionLogRow {
+  id: string;
+  source_type: AiActionSourceType;
+  action: AiActionType;
+  work_item_id: string;
+  confidence: string;
+  relevance: string;
+  reasoning: string | null;
+  changed_fields: string[];
+  before_values: Record<string, unknown>;
+  after_values: Record<string, unknown>;
+  created_at: string;
+  undone_at: string | null;
+}
+
 // Tipos "Insert" escritos como object literals planos (sin Partial<Row> & {...}).
 // IMPORTANTE: @supabase/supabase-js 2.11x + TypeScript 5.9 resuelven el generic
 // `Schema extends GenericSchema ? Schema : never` de SupabaseClient evaluando
@@ -293,6 +318,21 @@ type WhatsAppIngestionInsert = {
   received_at?: string;
   processed_at?: string | null;
 };
+type AutomationSettingsUpdate = { whatsapp_auto_enabled?: boolean; min_confidence?: string; updated_at?: string };
+type AiActionLogInsert = {
+  id?: string;
+  source_type: AiActionSourceType;
+  action: AiActionType;
+  work_item_id: string;
+  confidence: string;
+  relevance: string;
+  reasoning?: string | null;
+  changed_fields?: string[];
+  before_values?: Record<string, unknown>;
+  after_values?: Record<string, unknown>;
+  created_at?: string;
+  undone_at?: string | null;
+};
 type CorrectionLogInsert = {
   id?: string;
   work_item_id: string;
@@ -355,6 +395,18 @@ export interface Database {
         Row: WhatsAppIngestionRow;
         Insert: WhatsAppIngestionInsert;
         Update: Partial<WhatsAppIngestionRow>;
+        Relationships: never[];
+      };
+      automation_settings: {
+        Row: AutomationSettingsRow;
+        Insert: AutomationSettingsUpdate;
+        Update: AutomationSettingsUpdate;
+        Relationships: never[];
+      };
+      ai_action_log: {
+        Row: AiActionLogRow;
+        Insert: AiActionLogInsert;
+        Update: Partial<AiActionLogRow>;
         Relationships: never[];
       };
     };

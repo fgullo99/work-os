@@ -6,6 +6,7 @@ import type { WorkItemRow } from "@/lib/supabase/types";
  * testeable sin tocar la IA ni el resolver de fechas — recibe solo lo que necesita decidir.
  */
 export interface ResolvedClassification {
+  relevance: "WORK" | "PERSONAL" | "UNCERTAIN";
   classification: "ACTION" | "WAITING" | "COMMITMENT" | "INFO" | "IGNORE";
   next_action: string | null;
   waiting_for_what: string | null;
@@ -35,15 +36,23 @@ export type ActionPlan =
   | { type: "REVIEW_POTENTIAL_COMMITMENT" }
   | { type: "REVIEW_POSSIBLE_DUPLICATE"; candidateIds: string[] };
 
-const TRACKED_FIELDS = ["next_action", "waiting_for_what", "due_date", "expected_date", "committed_date"] as const;
+export const TRACKED_FIELDS = ["next_action", "waiting_for_what", "due_date", "expected_date", "committed_date"] as const;
 export type TrackedField = (typeof TRACKED_FIELDS)[number];
 
-function safeFieldsToFill(classification: ResolvedClassification, existing: WorkItemRow): TrackedField[] {
+/** Exportada para reuso desde src/lib/whatsapp/zapiaPipeline.ts — mismo criterio de "solo
+ * llenar campos vacios" para los dos canales, un solo lugar de verdad. */
+export function safeFieldsToFill(
+  classification: Pick<ResolvedClassification, TrackedField>,
+  existing: WorkItemRow
+): TrackedField[] {
   return TRACKED_FIELDS.filter((f) => existing[f] === null && classification[f] !== null);
 }
 
-/** true si aplicar la clasificacion nueva pisaria un valor YA cargado con uno distinto. */
-function wouldOverwriteExistingValue(classification: ResolvedClassification, existing: WorkItemRow): boolean {
+/** true si aplicar la clasificacion nueva pisaria un valor YA cargado con uno distinto.
+ * Exportada por el mismo motivo que safeFieldsToFill — reusada desde zapiaPipeline.ts para
+ * que un update automatico de WhatsApp tampoco pueda "tapar" informacion en conflicto sin
+ * pasar por Review, igual que Gmail. */
+export function wouldOverwriteExistingValue(classification: Pick<ResolvedClassification, TrackedField>, existing: WorkItemRow): boolean {
   return TRACKED_FIELDS.some((f) => existing[f] !== null && classification[f] !== null && existing[f] !== classification[f]);
 }
 
@@ -53,6 +62,12 @@ function wouldOverwriteExistingValue(classification: ResolvedClassification, exi
  */
 export function decideAction(input: DecisionInput): ActionPlan {
   const { classification, existingWorkItem, duplicateCandidateIds, hasNewInboundSinceLastSync } = input;
+
+  // Gate de relevancia, antes que todo lo demas: un thread PERSONAL nunca genera ni
+  // actualiza un Work Item, sin importar confidence o classification.
+  if (classification.relevance === "PERSONAL") {
+    return { type: "IGNORE", reason: "relevance=PERSONAL" };
+  }
 
   // Prioridad absoluta, independiente de confidence/classification: un Work Item WAITING
   // que recibe actividad inbound nueva NUNCA se cierra solo. Siempre se sugiere revisar.
@@ -80,6 +95,10 @@ export function decideAction(input: DecisionInput): ActionPlan {
     if (wouldOverwriteExistingValue(classification, existingWorkItem)) {
       return { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: existingWorkItem.id };
     }
+    // relevance=UNCERTAIN nunca es suficiente para auto-aplicar, aunque confidence sea HIGH.
+    if (classification.relevance === "UNCERTAIN") {
+      return { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: existingWorkItem.id };
+    }
     return {
       type: "UPDATE_WORK_ITEM_SAFE",
       workItemId: existingWorkItem.id,
@@ -93,6 +112,11 @@ export function decideAction(input: DecisionInput): ActionPlan {
   }
 
   if (classification.confidence === "MEDIUM") {
+    return { type: "REVIEW_NEW_WORK_ITEM" };
+  }
+
+  // relevance=UNCERTAIN nunca es suficiente para auto-crear, aunque confidence sea HIGH.
+  if (classification.relevance === "UNCERTAIN") {
     return { type: "REVIEW_NEW_WORK_ITEM" };
   }
 

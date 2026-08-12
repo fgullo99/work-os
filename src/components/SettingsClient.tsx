@@ -8,6 +8,7 @@ import { GmailConnectPanel } from "./GmailConnectPanel";
 import { WhatsAppStatusPanel } from "./WhatsAppStatusPanel";
 import { CalendarStatusPanel } from "./CalendarStatusPanel";
 import { AiEnginePanel } from "./AiEnginePanel";
+import { AiAutomationPanel } from "./AiAutomationPanel";
 import { PurgeDemoPanel } from "./PurgeDemoPanel";
 
 interface Props {
@@ -63,6 +64,8 @@ export function SettingsClient({
             <CalendarStatusPanel />
           </div>
         </div>
+
+        <AiAutomationPanel />
 
         <AiEnginePanel provider={aiProvider} model={aiModel} />
 

@@ -11,6 +11,13 @@ body {
   @apply bg-ink-50 text-ink-800 antialiased;
 }
 
+h1,
+h2,
+h3,
+h4 {
+  @apply font-heading;
+}
+
 * {
   border-color: theme("colors.ink.100");
 }

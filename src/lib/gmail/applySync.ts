@@ -8,6 +8,8 @@ import { decideAction, type ActionPlan, type ResolvedClassification } from "./de
 import { resolveDatePhrase } from "@/lib/dates/resolveDatePhrase";
 import { findBestMatch } from "@/lib/workItems/match";
 import { createCompany, createContact, createContext, listCompanies, listContacts, listContexts } from "@/lib/workItems/entities";
+import { isAutoCreateEligible, classifyAutoUpdate } from "@/lib/engine/automationGate";
+import { logAiAction } from "@/lib/engine/aiActionLog";
 
 type DB = SupabaseClient;
 
@@ -17,6 +19,7 @@ export interface ThreadSyncLogEntry {
   ruleFilterSkipped: boolean;
   ruleFilterReason: string | null;
   llmCalled: boolean;
+  relevance: string | null;
   classification: string | null;
   confidence: string | null;
   action: string;
@@ -26,28 +29,55 @@ export interface ApplySyncDeps {
   supabase: DB;
   aiProvider: AIProvider;
   todayISO: string;
-  /** Safe Bootstrap Mode (google_connection.safe_mode): mientras esta en true, nada se
-   * auto-crea ni auto-actualiza — todo lo que hubiera sido CREATE_WORK_ITEM o
-   * UPDATE_WORK_ITEM_SAFE pasa a Review, y se deja constancia de que accion se habria
-   * tomado (log.action = "WOULD_CREATE"/"WOULD_UPDATE"). RECEIVED_CHECK ya iba siempre a
-   * Review, asi que no cambia. */
+  /** google_connection.safe_mode, unica fuente de verdad de "AI Automation" para Gmail
+   * (ver Settings → AI Automation). safe_mode=true es el kill switch manual: fuerza Review
+   * siempre, sin importar el gate estructural. safe_mode=false habilita auto-apply, pero
+   * solo para lo que ademas pase isAutoCreateEligible/classifyAutoUpdate (ver
+   * src/lib/engine/automationGate.ts). */
   safeMode: boolean;
 }
 
+export interface AutomationGateContext {
+  /** Solo se evalua si plan.type === "CREATE_WORK_ITEM". */
+  createEligible: boolean;
+  /** Solo se evalua si plan.type === "UPDATE_WORK_ITEM_SAFE". */
+  updateDecision: "AUTO_SAFE" | "REVIEW";
+}
+
 /**
- * Aplica Safe Bootstrap Mode sobre el plan ya decidido por decideAction(): en safe mode,
- * lo que hubiera creado/actualizado un Work Item solo pasa a Review, dejando constancia de
- * que accion se habria tomado. Pura y sin dependencias — decideAction() sigue sin saber
- * nada de safe mode, esta funcion es la unica que remapea su resultado.
+ * Aplica el gate de automatizacion sobre el plan ya decidido por decideAction(): con
+ * safe_mode=true (kill switch), todo lo que hubiera creado/actualizado pasa a Review sin
+ * excepcion. Con safe_mode=false, ademas hace falta pasar el gate estructural
+ * (isAutoCreateEligible / classifyAutoUpdate) para auto-aplicar — si no lo pasa, tambien
+ * cae a Review. Pura y sin dependencias — decideAction() sigue sin saber nada de esto.
  */
-export function applySafeMode(plan: ActionPlan, safeMode: boolean): { plan: ActionPlan; actionLabel: string } {
-  if (safeMode && plan.type === "CREATE_WORK_ITEM") {
-    return { plan: { type: "REVIEW_NEW_WORK_ITEM" }, actionLabel: "WOULD_CREATE (safe mode)" };
+export function applyAutomationGate(
+  plan: ActionPlan,
+  safeMode: boolean,
+  gate: AutomationGateContext
+): { plan: ActionPlan; actionLabel: string } {
+  if (safeMode) {
+    if (plan.type === "CREATE_WORK_ITEM") {
+      return { plan: { type: "REVIEW_NEW_WORK_ITEM" }, actionLabel: "WOULD_CREATE (automation off)" };
+    }
+    if (plan.type === "UPDATE_WORK_ITEM_SAFE") {
+      return {
+        plan: { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: plan.workItemId },
+        actionLabel: "WOULD_UPDATE (automation off)",
+      };
+    }
+    return { plan, actionLabel: plan.type };
   }
-  if (safeMode && plan.type === "UPDATE_WORK_ITEM_SAFE") {
+
+  if (plan.type === "CREATE_WORK_ITEM") {
+    if (gate.createEligible) return { plan, actionLabel: "AUTO_CREATE" };
+    return { plan: { type: "REVIEW_NEW_WORK_ITEM" }, actionLabel: "REVIEW (below auto-create threshold)" };
+  }
+  if (plan.type === "UPDATE_WORK_ITEM_SAFE") {
+    if (gate.updateDecision === "AUTO_SAFE") return { plan, actionLabel: "AUTO_UPDATE" };
     return {
       plan: { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: plan.workItemId },
-      actionLabel: "WOULD_UPDATE (safe mode)",
+      actionLabel: "REVIEW (update fuera de la lista segura)",
     };
   }
   return { plan, actionLabel: plan.type };
@@ -61,6 +91,7 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     ruleFilterSkipped: false,
     ruleFilterReason: null,
     llmCalled: false,
+    relevance: null,
     classification: null,
     confidence: null,
     action: "",
@@ -94,10 +125,12 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     currentDateISO: deps.todayISO,
   });
 
+  log.relevance = raw.relevance;
   log.classification = raw.classification;
   log.confidence = raw.confidence;
 
   const resolved: ResolvedClassification = {
+    relevance: raw.relevance,
     classification: raw.classification,
     next_action: raw.next_action,
     waiting_for_what: raw.waiting_for_what,
@@ -143,7 +176,25 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     lastMessageIsOutbound,
   });
 
-  const { plan, actionLabel } = applySafeMode(rawPlan, deps.safeMode);
+  const createEligible = isAutoCreateEligible({
+    relevance: raw.relevance,
+    confidence: raw.confidence,
+    hasClearActor: Boolean(raw.suggested_contact || raw.waiting_for_person),
+    hasClearAction: Boolean(resolved.next_action || resolved.waiting_for_what),
+    directionConsistent: true, // Gmail siempre tiene direccion INBOUND/OUTBOUND determinada por header, nunca "unknown"
+    hasAmbiguousMatch: duplicateCandidateIds.length > 1,
+  });
+  const updateDecision =
+    rawPlan.type === "UPDATE_WORK_ITEM_SAFE"
+      ? classifyAutoUpdate({
+          relevance: raw.relevance,
+          confidence: raw.confidence,
+          changedFields: rawPlan.fieldsToFill,
+          matchUnambiguous: true, // findWorkItemByThreadId es un match exacto por thread_id, no fuzzy
+        })
+      : "REVIEW";
+
+  const { plan, actionLabel } = applyAutomationGate(rawPlan, deps.safeMode, { createEligible, updateDecision });
   log.action = actionLabel;
 
   switch (plan.type) {
@@ -167,6 +218,19 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
       const ids = await resolveOrCreateEntities(deps.supabase, raw);
       const workItem = await createWorkItemFromGmail(deps.supabase, thread, raw, resolved, ids, latestMessage);
       await createSourceLinkForThread(deps.supabase, workItem.id, thread, latestMessage);
+      if (actionLabel === "AUTO_CREATE") {
+        await logAiAction(deps.supabase, {
+          sourceType: "GMAIL",
+          action: "CREATE",
+          workItemId: workItem.id,
+          confidence: raw.confidence,
+          relevance: raw.relevance,
+          reasoning: raw.rationale,
+          changedFields: [],
+          beforeValues: {},
+          afterValues: { title: workItem.title },
+        });
+      }
       break;
     }
 
@@ -176,12 +240,29 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
         last_message_direction: latestMessage?.direction ?? null,
         ai_summary: raw.summary,
       };
+      const beforeValues: Record<string, unknown> = {};
+      const afterValues: Record<string, unknown> = {};
       for (const field of plan.fieldsToFill) {
         patch[field] = resolved[field];
+        beforeValues[field] = existingWorkItem ? existingWorkItem[field] : null;
+        afterValues[field] = resolved[field];
       }
       const { error } = await deps.supabase.from("work_item").update(patch).eq("id", plan.workItemId);
       if (error) throw error;
       await createSourceLinkForThread(deps.supabase, plan.workItemId, thread, latestMessage);
+      if (actionLabel === "AUTO_UPDATE") {
+        await logAiAction(deps.supabase, {
+          sourceType: "GMAIL",
+          action: "UPDATE",
+          workItemId: plan.workItemId,
+          confidence: raw.confidence,
+          relevance: raw.relevance,
+          reasoning: raw.rationale,
+          changedFields: plan.fieldsToFill,
+          beforeValues,
+          afterValues,
+        });
+      }
       break;
     }
 

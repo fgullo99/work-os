@@ -53,4 +53,23 @@ describe("applyRuleFilter", () => {
     );
     expect(result.skip).toBe(false);
   });
+
+  // Regresion (auditoria real-usage): confirmado que ni CATEGORY_PERSONAL ni "estar en CC"
+  // existen como motivo de descarte en el codigo — se fija con un test para que no se
+  // reintroduzca sin querer.
+  it("NO descarta por estar en CC con muchos destinatarios (CC nunca implica descarte automatico)", () => {
+    const result = applyRuleFilter(
+      thread([msg({ direction: "INBOUND", cc: ["equipo@empresa.com", "otro@empresa.com", "mas@empresa.com"] })])
+    );
+    expect(result.skip).toBe(false);
+  });
+
+  it("NO existe ningun campo de categoria/label de Gmail en NormalizedMessage que pueda usarse para descartar", () => {
+    // Si en el futuro se agrega labelIds/category a NormalizedMessage, este test no protege
+    // nada por si solo — el punto real esta documentado en el prompt/decisionEngine: la
+    // relevancia se decide por contenido (relevance WORK/PERSONAL), nunca por label de Gmail.
+    const m = msg({ direction: "INBOUND" });
+    expect("labelIds" in m).toBe(false);
+    expect("category" in m).toBe(false);
+  });
 });

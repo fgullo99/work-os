@@ -8,6 +8,10 @@ import { z } from "zod";
  * INBOUND/OUTBOUND" hacia el prompt de captura manual confuso para ambos casos.
  */
 export const emailThreadResultSchema = z.object({
+  relevance: z
+    .enum(["WORK", "PERSONAL", "UNCERTAIN"])
+    .describe("Si el thread es laboral, personal, o no se puede determinar con confianza. Se evalua ANTES que classification."),
+
   classification: z
     .enum(["ACTION", "WAITING", "COMMITMENT", "INFO", "IGNORE"])
     .describe("Clasificacion dominante del thread."),

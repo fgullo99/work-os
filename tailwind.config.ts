@@ -19,15 +19,15 @@ const config: Config = {
           50: "#F7F8FA",
         },
         accent: {
-          600: "#3B4CE0",
-          500: "#4A5AF0",
-          400: "#6E7BF5",
-          100: "#E7E9FD",
-          50: "#F2F3FE",
+          600: "#7E1D12",
+          500: "#9C2416",
+          400: "#B84433",
+          100: "#FBEAE7",
+          50: "#FDF3F1",
         },
         risk: {
-          600: "#C4432B",
-          100: "#FBEAE6",
+          600: "#C2410C",
+          100: "#FCEADB",
         },
         waiting: {
           600: "#9A6B12",
@@ -35,13 +35,8 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: [
-          "Inter",
-          "-apple-system",
-          "BlinkMacSystemFont",
-          "Segoe UI",
-          "sans-serif",
-        ],
+        sans: ["var(--font-inter)", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
+        heading: ["var(--font-space-grotesk)", "var(--font-inter)", "-apple-system", "sans-serif"],
       },
       boxShadow: {
         card: "0 1px 2px rgba(16, 18, 27, 0.04), 0 1px 1px rgba(16, 18, 27, 0.03)",

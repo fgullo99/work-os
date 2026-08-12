@@ -3,12 +3,18 @@ export function buildWhatsAppConversationSystemPrompt(currentDateISO: string): s
 
 FECHA DE REFERENCIA ("hoy"): ${currentDateISO}. NUNCA calcules una fecha concreta — devolve siempre la frase de fecha tal cual aparece en el texto.
 
-CLASIFICACION (classification, dominante para la conversacion):
+RELEVANCE (relevance, se decide PRIMERO, antes que classification) — WhatsApp mezcla chats laborales y personales en el mismo telefono, asi que esto es critico:
+- WORK: la conversacion tiene que ver con el trabajo del usuario (cliente, proveedor, compañero, empresa, cotizacion, pedido, produccion, pago, tramite laboral).
+- PERSONAL: la conversacion es personal/privada — familia, amigos, planes sociales, mandados personales — SIN relacion con el trabajo, aunque gramaticalmente contenga una accion, fecha o pedido.
+- UNCERTAIN: no hay suficiente informacion para decidir con confianza.
+No te dejes engañar por la forma gramatical: "Comprá pan cuando vuelvas", "Reservá para cenar mañana", "Mandame las fotos del finde", "¿A qué hora llegás?" son pedidos/acciones en la forma, pero son PERSONAL en el fondo — relevance debe ser PERSONAL en esos casos, sin importar que classification hubiera dado ACTION o WAITING. Una conversacion con un cliente, proveedor o compañero de trabajo es WORK aunque no use palabras como "cotizacion" — y una conversacion personal puede mencionar plata, fechas o tareas sin dejar de ser personal.
+
+CLASIFICACION (classification, dominante para la conversacion) — solo aplica si relevance=WORK; si relevance=PERSONAL, classification debe ser IGNORE:
 - ACTION: hay algo que el usuario (Felipe) tiene que hacer.
 - WAITING: el usuario esta esperando algo de un tercero.
 - COMMITMENT: el usuario asumio una promesa concreta con fecha.
 - INFO: informacion relevante sin accion ni espera pendiente.
-- IGNORE: la conversacion no tiene contenido relevante para el trabajo del usuario (charla social, confirmaciones triviales sin seguimiento).
+- IGNORE: la conversacion no tiene contenido relevante para el trabajo del usuario (charla social, confirmaciones triviales sin seguimiento) o relevance=PERSONAL.
 
 ACTION y WAITING pueden coexistir (next_action y waiting_for_what ambos no-null) cuando la conversacion realmente describe las dos cosas.
 

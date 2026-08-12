@@ -22,6 +22,11 @@ export interface SyncSummary {
   reviewItems: number;
   ignored: number;
   errors: number;
+  autoCreated: number;
+  autoUpdated: number;
+  personalFiltered: number;
+  /** Motivo de rule-filter -> cantidad (ver ruleFilter.ts). Ej: {"List-Unsubscribe...": 14}. */
+  filteredByReason: Record<string, number>;
   log: ThreadSyncLogEntry[];
 }
 
@@ -63,6 +68,7 @@ async function processThreadIds(
         ruleFilterSkipped: false,
         ruleFilterReason: null,
         llmCalled: false,
+        relevance: null,
         classification: null,
         confidence: null,
         action: "ERROR",
@@ -78,14 +84,29 @@ function summarize(entries: ThreadSyncLogEntry[]): Omit<SyncSummary, "log"> {
   let reviewItems = 0;
   let ignored = 0;
   let errors = 0;
+  let autoCreated = 0;
+  let autoUpdated = 0;
+  let personalFiltered = 0;
+  const filteredByReason: Record<string, number> = {};
+
   for (const e of entries) {
+    if (e.ruleFilterReason) {
+      filteredByReason[e.ruleFilterReason] = (filteredByReason[e.ruleFilterReason] ?? 0) + 1;
+    }
+    if (e.relevance === "PERSONAL") personalFiltered += 1;
+
     if (e.action === "ERROR") errors += 1;
-    else if (e.action === "CREATE_WORK_ITEM" || e.action === "UPDATE_WORK_ITEM_SAFE" || e.action.startsWith("WOULD_"))
+    else if (e.action === "AUTO_CREATE") {
+      autoCreated += 1;
       highItems += 1;
+    } else if (e.action === "AUTO_UPDATE") {
+      autoUpdated += 1;
+      highItems += 1;
+    } else if (e.action.startsWith("WOULD_")) highItems += 1;
     else if (e.action.startsWith("REVIEW") || e.action === "RECEIVED_CHECK") reviewItems += 1;
     else ignored += 1;
   }
-  return { threadsAnalyzed: entries.length, highItems, reviewItems, ignored, errors };
+  return { threadsAnalyzed: entries.length, highItems, reviewItems, ignored, errors, autoCreated, autoUpdated, personalFiltered, filteredByReason };
 }
 
 export interface ImportPreview {
@@ -100,6 +121,9 @@ export interface ImportPreview {
   highConfidence: number;
   review: number;
   possibleDuplicates: number;
+  personal: number;
+  autoCreated: number;
+  autoUpdated: number;
 }
 
 /** Desglose para la pantalla "GMAIL IMPORT PREVIEW" que se muestra despues de un bootstrap
@@ -117,13 +141,19 @@ export function buildImportPreview(entries: ThreadSyncLogEntry[]): ImportPreview
     highConfidence: 0,
     review: 0,
     possibleDuplicates: 0,
+    personal: 0,
+    autoCreated: 0,
+    autoUpdated: 0,
   };
 
   for (const e of entries) {
     if (e.ruleFilterSkipped) preview.ruleFiltered += 1;
     if (e.llmCalled) preview.analyzedByAI += 1;
     if (e.confidence === "HIGH") preview.highConfidence += 1;
+    if (e.relevance === "PERSONAL") preview.personal += 1;
     if (e.action === "REVIEW_POSSIBLE_DUPLICATE") preview.possibleDuplicates += 1;
+    if (e.action === "AUTO_CREATE") preview.autoCreated += 1;
+    if (e.action === "AUTO_UPDATE") preview.autoUpdated += 1;
     if (e.action.startsWith("REVIEW") || e.action.startsWith("WOULD_") || e.action === "RECEIVED_CHECK") {
       preview.review += 1;
     }
@@ -160,7 +190,7 @@ export function buildImportPreview(entries: ThreadSyncLogEntry[]): ImportPreview
 export async function runBootstrapSync(
   supabase: SupabaseClient,
   connection: GoogleConnectionRow,
-  days: 7 | 14 | 30
+  days: 7 | 14 | 30 | 60 | 90
 ): Promise<{ summary: SyncSummary; preview: ImportPreview }> {
   const authClient = await getAuthorizedGmailClient(connection);
   const gmail = getGmailApi(authClient);

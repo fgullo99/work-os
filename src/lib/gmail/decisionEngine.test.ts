@@ -6,6 +6,7 @@ const TODAY = "2026-08-10";
 
 function classification(overrides: Partial<ResolvedClassification> = {}): ResolvedClassification {
   return {
+    relevance: "WORK",
     classification: "ACTION",
     next_action: "Hacer algo",
     waiting_for_what: null,
@@ -195,5 +196,60 @@ describe("decideAction", () => {
       lastMessageIsOutbound: false,
     });
     expect(plan.type).not.toBe("RECEIVED_CHECK");
+  });
+
+  it("relevance=PERSONAL siempre resulta en IGNORE, incluso con confidence HIGH y classification ACTION", () => {
+    const plan = decideAction({
+      classification: classification({ relevance: "PERSONAL", confidence: "HIGH", classification: "ACTION" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("IGNORE");
+  });
+
+  it("relevance=PERSONAL con Work Item existente tambien resulta en IGNORE (no actualiza)", () => {
+    const plan = decideAction({
+      classification: classification({ relevance: "PERSONAL", confidence: "HIGH" }),
+      existingWorkItem: workItem(),
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("IGNORE");
+  });
+
+  it("relevance=UNCERTAIN + HIGH + sin existing -> REVIEW_NEW_WORK_ITEM, nunca CREATE_WORK_ITEM", () => {
+    const plan = decideAction({
+      classification: classification({ relevance: "UNCERTAIN", confidence: "HIGH" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("REVIEW_NEW_WORK_ITEM");
+  });
+
+  it("relevance=UNCERTAIN + HIGH + existing (llenaria campos vacios) -> REVIEW_UPDATE_WORK_ITEM, nunca UPDATE_WORK_ITEM_SAFE", () => {
+    const plan = decideAction({
+      classification: classification({ relevance: "UNCERTAIN", confidence: "HIGH", next_action: "Nueva accion" }),
+      existingWorkItem: workItem({ next_action: null }),
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("REVIEW_UPDATE_WORK_ITEM");
+  });
+
+  it("relevance=WORK + HIGH + sin existing -> sigue siendo CREATE_WORK_ITEM (regresion)", () => {
+    const plan = decideAction({
+      classification: classification({ relevance: "WORK", confidence: "HIGH" }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("CREATE_WORK_ITEM");
   });
 });

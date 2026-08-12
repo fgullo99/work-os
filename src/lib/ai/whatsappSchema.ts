@@ -9,6 +9,12 @@ import { z } from "zod";
  * responsable de resolver esto) es propia de este canal.
  */
 export const whatsappConversationResultSchema = z.object({
+  relevance: z
+    .enum(["WORK", "PERSONAL", "UNCERTAIN"])
+    .describe(
+      "Si la conversacion es laboral, personal, o no se puede determinar con confianza. Se evalua ANTES que classification — una conversacion PERSONAL nunca genera Work Item, sin importar que classification hubiera salido."
+    ),
+
   classification: z
     .enum(["ACTION", "WAITING", "COMMITMENT", "INFO", "IGNORE"])
     .describe("Clasificacion dominante de la conversacion."),

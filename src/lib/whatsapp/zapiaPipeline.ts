@@ -8,8 +8,13 @@ import { resolveDatePhrase } from "@/lib/dates/resolveDatePhrase";
 import { findBestMatch } from "@/lib/workItems/match";
 import { listCompanies, listContacts, listContexts } from "@/lib/workItems/entities";
 import { findDuplicateCandidates } from "@/lib/gmail/workItemMatch";
+import { safeFieldsToFill, wouldOverwriteExistingValue, TRACKED_FIELDS, type TrackedField } from "@/lib/gmail/decisionEngine";
+import { acceptNewWorkItem, applyUpdateToWorkItem } from "@/lib/workItems/reviewItems";
 import { findWorkItemByChatId } from "./zapiaMatch";
-import { decideZapiaAction, type ZapiaClassification } from "./zapiaDecision";
+import { decideZapiaAction, applyZapiaAutomationGate, type ZapiaClassification } from "./zapiaDecision";
+import { isAutoCreateEligible, classifyAutoUpdate } from "@/lib/engine/automationGate";
+import { getAutomationSettings } from "@/lib/engine/automationSettings";
+import { logAiAction } from "@/lib/engine/aiActionLog";
 
 type DB = SupabaseClient;
 
@@ -19,12 +24,13 @@ export interface ZapiaPipelineDeps {
   todayISO: string;
 }
 
-export type ZapiaConversationOutcome = "review_created" | "ignored" | "duplicate" | "failed";
+export type ZapiaConversationOutcome = "review_created" | "auto_created" | "auto_updated" | "ignored" | "duplicate" | "failed";
 
 export interface ZapiaConversationLogEntry {
   idempotencyKey: string;
   chatId: string | null;
   outcome: ZapiaConversationOutcome;
+  relevance: string | null;
   classification: string | null;
   confidence: string | null;
   reviewItemId: string | null;
@@ -85,6 +91,7 @@ export async function processZapiaConversation(
     idempotencyKey,
     chatId,
     outcome: "failed",
+    relevance: null,
     classification: null,
     confidence: null,
     reviewItemId: null,
@@ -145,6 +152,7 @@ export async function processZapiaConversation(
       currentDateISO: deps.todayISO,
     });
 
+    log.relevance = raw.relevance;
     log.classification = raw.classification;
     log.confidence = raw.confidence;
 
@@ -165,10 +173,49 @@ export async function processZapiaConversation(
       duplicateCandidateIds = candidates.map((c) => c.id);
     }
 
-    const plan = decideZapiaAction({
+    // Fechas resueltas una sola vez, reusadas tanto por el gate de automatizacion
+    // (safeFieldsToFill/classifyAutoUpdate) como por el proposedPayload de Review.
+    const resolvedTracked: Record<TrackedField, string | null> = {
+      next_action: raw.next_action,
+      waiting_for_what: raw.waiting_for_what,
+      due_date: resolveDatePhrase(raw.due_date_phrase, deps.todayISO),
+      expected_date: resolveDatePhrase(raw.expected_date_phrase, deps.todayISO),
+      committed_date: resolveDatePhrase(raw.committed_date_phrase, deps.todayISO),
+    };
+
+    const automationSettings = await getAutomationSettings(deps.supabase);
+    const lastMessage = unit.messages[unit.messages.length - 1];
+    const createEligible = isAutoCreateEligible({
+      relevance: raw.relevance,
+      confidence: raw.confidence,
+      hasClearActor: Boolean(raw.suggested_contact || raw.waiting_for_person),
+      hasClearAction: Boolean(raw.next_action || raw.waiting_for_what),
+      directionConsistent: lastMessage?.direction !== "unknown",
+      hasAmbiguousMatch: duplicateCandidateIds.length > 1,
+    });
+    const changedFields = existingWorkItem ? safeFieldsToFill(resolvedTracked, existingWorkItem) : [];
+    // Igual que Gmail: si aplicar esto pisaria un campo YA cargado con un valor distinto,
+    // nunca es auto-aplicable — va a Review sin importar que changedFields de vacio.
+    const hasConflict = existingWorkItem ? wouldOverwriteExistingValue(resolvedTracked, existingWorkItem) : false;
+    const updateDecision =
+      existingWorkItem && !hasConflict
+        ? classifyAutoUpdate({
+            relevance: raw.relevance,
+            confidence: raw.confidence,
+            changedFields,
+            matchUnambiguous: true, // findWorkItemByChatId es un match exacto por chat_id, no fuzzy
+          })
+        : "REVIEW";
+
+    const basePlan = decideZapiaAction({
+      relevance: raw.relevance,
       classification: resolved,
       existingWorkItem,
       duplicateCandidateIds,
+    });
+    const plan = applyZapiaAutomationGate(basePlan, automationSettings.whatsapp_auto_enabled, {
+      createEligible,
+      updateDecision,
     });
 
     if (plan.type === "IGNORE") {
@@ -183,12 +230,12 @@ export async function processZapiaConversation(
 
     const proposedPayload: ReviewProposedPayload = {
       title: raw.suggested_context || unit.conversation.chat_name || unit.conversation.contact_name || "WhatsApp",
-      next_action: raw.next_action,
-      waiting_for_what: raw.waiting_for_what,
+      next_action: resolvedTracked.next_action,
+      waiting_for_what: resolvedTracked.waiting_for_what,
       waiting_for_person: raw.waiting_for_person,
-      due_date: resolveDatePhrase(raw.due_date_phrase, deps.todayISO),
-      expected_date: resolveDatePhrase(raw.expected_date_phrase, deps.todayISO),
-      committed_date: resolveDatePhrase(raw.committed_date_phrase, deps.todayISO),
+      due_date: resolvedTracked.due_date,
+      expected_date: resolvedTracked.expected_date,
+      committed_date: resolvedTracked.committed_date,
       suggested_company: raw.suggested_company,
       suggested_contact: raw.suggested_contact,
       suggested_context: raw.suggested_context,
@@ -199,14 +246,14 @@ export async function processZapiaConversation(
       responsible: raw.responsible,
     };
 
-    const workItemId = plan.type === "REVIEW_UPDATE_WORK_ITEM" ? plan.workItemId : null;
+    const workItemId = plan.type === "REVIEW_UPDATE_WORK_ITEM" || plan.type === "UPDATE_WORK_ITEM_AUTO" ? plan.workItemId : null;
     const duplicateIds = plan.type === "REVIEW_POSSIBLE_DUPLICATE" ? plan.candidateIds : null;
 
     const { data: reviewItemData, error: reviewError } = await deps.supabase
       .from("review_item")
       .insert({
         kind:
-          plan.type === "REVIEW_UPDATE_WORK_ITEM"
+          plan.type === "REVIEW_UPDATE_WORK_ITEM" || plan.type === "UPDATE_WORK_ITEM_AUTO"
             ? "UPDATE_WORK_ITEM"
             : plan.type === "REVIEW_POSSIBLE_DUPLICATE"
               ? "POSSIBLE_DUPLICATE"
@@ -228,8 +275,52 @@ export async function processZapiaConversation(
     if (reviewError) throw reviewError;
 
     const reviewItemId = (reviewItemData as { id: string }).id;
-    log.outcome = "review_created";
     log.reviewItemId = reviewItemId;
+
+    if (plan.type === "CREATE_WORK_ITEM") {
+      const workItem = await acceptNewWorkItem(deps.supabase, reviewItemId);
+      await logAiAction(deps.supabase, {
+        sourceType: "WHATSAPP",
+        action: "CREATE",
+        workItemId: workItem.id,
+        confidence: raw.confidence,
+        relevance: raw.relevance,
+        reasoning: raw.summary,
+        changedFields: [],
+        beforeValues: {},
+        afterValues: { title: workItem.title },
+      });
+      log.outcome = "auto_created";
+    } else if (plan.type === "UPDATE_WORK_ITEM_AUTO") {
+      // overrides fuerza a undefined todo lo que NO esta en changedFields — applyUpdateToWorkItem
+      // solo toca un campo si es !== undefined, asi que esto restringe el update automatico a
+      // exactamente los campos que safeFieldsToFill considero seguros (nunca pisa uno ya cargado).
+      const overrides: Partial<ReviewProposedPayload> = { blocking: undefined };
+      for (const field of TRACKED_FIELDS) {
+        if (!changedFields.includes(field)) overrides[field] = undefined;
+      }
+      const beforeValues: Record<string, unknown> = {};
+      const afterValues: Record<string, unknown> = {};
+      for (const field of changedFields) {
+        beforeValues[field] = existingWorkItem ? existingWorkItem[field] : null;
+        afterValues[field] = resolvedTracked[field];
+      }
+      await applyUpdateToWorkItem(deps.supabase, reviewItemId, plan.workItemId, overrides);
+      await logAiAction(deps.supabase, {
+        sourceType: "WHATSAPP",
+        action: "UPDATE",
+        workItemId: plan.workItemId,
+        confidence: raw.confidence,
+        relevance: raw.relevance,
+        reasoning: raw.summary,
+        changedFields,
+        beforeValues,
+        afterValues,
+      });
+      log.outcome = "auto_updated";
+    } else {
+      log.outcome = "review_created";
+    }
 
     const { error: updateError } = await deps.supabase
       .from("whatsapp_ingestion")

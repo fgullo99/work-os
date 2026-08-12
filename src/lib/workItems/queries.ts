@@ -82,6 +82,12 @@ async function getLatestSourceByWorkItem(supabase: DB, workItemIds: string[]): P
   return map;
 }
 
+export interface RecentActivityAiAction {
+  logId: string;
+  sourceType: "GMAIL" | "WHATSAPP";
+  action: "CREATE" | "UPDATE";
+}
+
 export interface RecentActivityRow {
   id: string;
   work_item_id: string;
@@ -91,6 +97,9 @@ export interface RecentActivityRow {
   work_item_title: string;
   via: string | null;
   is_demo: boolean;
+  /** Si esta fila corresponde a una accion automatica de IA (AUTO_CREATE/AUTO_UPDATE) todavia
+   * no revertida, se puede ofrecer Undo — ver src/app/api/ai-activity/[id]/undo/route.ts. */
+  aiAction: RecentActivityAiAction | null;
 }
 
 /** Ultimos eventos reales (source_link) para el panel "Actividad reciente". Como los
@@ -114,7 +123,26 @@ export async function getRecentActivity(supabase: DB, limit = 6): Promise<Recent
     is_demo: boolean;
     work_item: { title: string } | null;
   };
-  return ((data ?? []) as unknown as Row[]).map((row) => ({
+  const rows = (data ?? []) as unknown as Row[];
+
+  const workItemIds = Array.from(new Set(rows.map((r) => r.work_item_id)));
+  const aiActionByWorkItem = new Map<string, RecentActivityAiAction>();
+  if (workItemIds.length > 0) {
+    const { data: aiRows, error: aiError } = await supabase
+      .from("ai_action_log")
+      .select("id, work_item_id, source_type, action")
+      .in("work_item_id", workItemIds)
+      .is("undone_at", null)
+      .order("created_at", { ascending: false });
+    if (aiError) throw aiError;
+    for (const row of (aiRows ?? []) as { id: string; work_item_id: string; source_type: "GMAIL" | "WHATSAPP"; action: "CREATE" | "UPDATE" }[]) {
+      if (!aiActionByWorkItem.has(row.work_item_id)) {
+        aiActionByWorkItem.set(row.work_item_id, { logId: row.id, sourceType: row.source_type, action: row.action });
+      }
+    }
+  }
+
+  return rows.map((row) => ({
     id: row.id,
     work_item_id: row.work_item_id,
     source_type: row.source_type,
@@ -123,6 +151,7 @@ export async function getRecentActivity(supabase: DB, limit = 6): Promise<Recent
     work_item_title: row.work_item?.title ?? "",
     via: providerToVia(row.raw_metadata),
     is_demo: row.is_demo,
+    aiAction: aiActionByWorkItem.get(row.work_item_id) ?? null,
   }));
 }
 

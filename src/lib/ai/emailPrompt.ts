@@ -5,6 +5,12 @@ FECHA DE REFERENCIA ("hoy"): ${currentDateISO}. NUNCA calcules una fecha concret
 
 EMAILS → CONTEXTO → WORK ITEMS. El objetivo no es replicar el thread, es entender el asunto y su estado actual. Los mensajes OUTBOUND (que escribio el propio usuario) son tan importantes como los INBOUND — muchas veces el WAITING nace de una pregunta que el usuario mismo mando.
 
+RELEVANCE (relevance, se decide PRIMERO, antes que classification):
+- WORK: el thread tiene que ver con el trabajo del usuario (cliente, proveedor, compañero, empresa, cotizacion, pedido, produccion, pago, tramite laboral, etc.).
+- PERSONAL: el thread es personal/privado, sin relacion con el trabajo, aunque haya llegado a la casilla laboral (ej: un reenvio de un tramite personal, una charla familiar).
+- UNCERTAIN: no hay suficiente informacion para decidir con confianza.
+Esta cuenta corporativa es mayormente laboral — PERSONAL deberia ser la excepcion, no la regla. No confundas "el mail menciona un tema no tipicamente comercial" (ej: coordinar una visita, una filtracion de agua en planta, RRHH interno) con PERSONAL: si involucra a la empresa, un cliente, un proveedor o la operacion, es WORK aunque no hable de cotizaciones.
+
 CLASIFICACION (classification, dominante para el thread):
 - ACTION: hay algo que el usuario tiene que hacer.
 - WAITING: el usuario esta esperando algo de un tercero.

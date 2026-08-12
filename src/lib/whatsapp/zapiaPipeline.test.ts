@@ -17,6 +17,7 @@ function unit(overrides: Partial<ZapiaConversationUnit> = {}): ZapiaConversation
 
 function fakeAIProvider(result: Partial<WhatsAppConversationResult> | ((input: NormalizeWhatsAppConversationInput) => Partial<WhatsAppConversationResult>)): AIProvider {
   const base: WhatsAppConversationResult = {
+    relevance: "WORK",
     classification: "ACTION",
     next_action: "Mandar el precio",
     waiting_for_person: null,
@@ -63,10 +64,22 @@ interface FakeTables {
   source_link: Row[];
   work_item: Row[];
   review_item: Row[];
+  automation_settings: Row[];
+  ai_action_log: Row[];
   [key: string]: Row[];
 }
 
-function makeFakeSupabase(seed: { whatsapp_ingestion?: Row[]; company?: Row[]; contact?: Row[]; context?: Row[]; source_link?: Row[]; work_item?: Row[] } = {}) {
+function makeFakeSupabase(
+  seed: {
+    whatsapp_ingestion?: Row[];
+    company?: Row[];
+    contact?: Row[];
+    context?: Row[];
+    source_link?: Row[];
+    work_item?: Row[];
+    automation_settings?: Row[];
+  } = {}
+) {
   const tables: FakeTables = {
     whatsapp_ingestion: seed.whatsapp_ingestion ?? [],
     company: seed.company ?? [],
@@ -75,6 +88,8 @@ function makeFakeSupabase(seed: { whatsapp_ingestion?: Row[]; company?: Row[]; c
     source_link: seed.source_link ?? [],
     work_item: seed.work_item ?? [],
     review_item: [],
+    automation_settings: seed.automation_settings ?? [],
+    ai_action_log: [],
   };
   const writes: { table: string; type: "insert" | "update"; payload: Row; filters: Array<[string, unknown]> }[] = [];
   let nextId = 1;
@@ -315,6 +330,7 @@ describe("processZapiaConversation", () => {
           throw new Error("Anthropic no disponible");
         }
         return {
+          relevance: "WORK",
           classification: "ACTION",
           next_action: "hacer algo",
           waiting_for_person: null,
@@ -404,5 +420,114 @@ describe("processZapiaConversation", () => {
     expect(second.outcome).toBe("review_created");
     expect(supabase.tables.whatsapp_ingestion).toHaveLength(1);
     expect(supabase.tables.whatsapp_ingestion[0]?.status).toBe("PROCESSED");
+  });
+
+  it("relevance=PERSONAL is ignored even when classification looks like ACTION and confidence is HIGH", async () => {
+    const supabase = makeFakeSupabase();
+    const ai = fakeAIProvider({ relevance: "PERSONAL", classification: "ACTION", next_action: "Comprar pan", confidence: "HIGH" });
+    const entry = await processZapiaConversation({ supabase: supabase as any, aiProvider: ai, todayISO: "2026-08-10" }, unit());
+    expect(entry.outcome).toBe("ignored");
+    expect(entry.relevance).toBe("PERSONAL");
+    expect(supabase.tables.review_item).toHaveLength(0);
+  });
+
+  it("with whatsapp_auto_enabled=false (default), a WORK+HIGH conversation still goes to Review, never auto-creates", async () => {
+    const supabase = makeFakeSupabase();
+    const ai = fakeAIProvider({
+      relevance: "WORK",
+      classification: "ACTION",
+      next_action: "Mandar el precio",
+      suggested_contact: "Juan",
+      confidence: "HIGH",
+    });
+    const entry = await processZapiaConversation({ supabase: supabase as any, aiProvider: ai, todayISO: "2026-08-10" }, unit());
+    expect(entry.outcome).toBe("review_created");
+    expect(supabase.writes.some((w) => w.table === "work_item")).toBe(false);
+  });
+
+  it("with whatsapp_auto_enabled=true, WORK+HIGH+clear actor/action auto-creates a Work Item and logs ai_action_log", async () => {
+    const supabase = makeFakeSupabase({ automation_settings: [{ whatsapp_auto_enabled: true }] });
+    const ai = fakeAIProvider({
+      relevance: "WORK",
+      classification: "ACTION",
+      next_action: "Mandar el precio",
+      suggested_contact: "Juan",
+      confidence: "HIGH",
+    });
+    const entry = await processZapiaConversation({ supabase: supabase as any, aiProvider: ai, todayISO: "2026-08-10" }, unit());
+    expect(entry.outcome).toBe("auto_created");
+    expect(supabase.tables.work_item).toHaveLength(1);
+    expect(supabase.tables.work_item[0]?.next_action).toBe("Mandar el precio");
+    expect(supabase.tables.review_item[0]?.status).toBe("ACCEPTED");
+    const logRows = supabase.tables.ai_action_log;
+    expect(logRows).toHaveLength(1);
+    expect(logRows[0]?.source_type).toBe("WHATSAPP");
+    expect(logRows[0]?.action).toBe("CREATE");
+  });
+
+  it("with whatsapp_auto_enabled=true but relevance=UNCERTAIN, still goes to Review (no auto-create)", async () => {
+    const supabase = makeFakeSupabase({ automation_settings: [{ whatsapp_auto_enabled: true }] });
+    const ai = fakeAIProvider({
+      relevance: "UNCERTAIN",
+      classification: "ACTION",
+      next_action: "Mandar el precio",
+      suggested_contact: "Juan",
+      confidence: "HIGH",
+    });
+    const entry = await processZapiaConversation({ supabase: supabase as any, aiProvider: ai, todayISO: "2026-08-10" }, unit());
+    expect(entry.outcome).toBe("review_created");
+    expect(supabase.tables.work_item).toHaveLength(0);
+  });
+
+  it("with whatsapp_auto_enabled=true, auto-updates only a previously-empty safe field on the matched Work Item", async () => {
+    const supabase = makeFakeSupabase({
+      automation_settings: [{ whatsapp_auto_enabled: true }],
+      work_item: [
+        {
+          id: "wi-1",
+          title: "Cliente A - Trafo",
+          status: "OPEN",
+          next_action: null,
+          waiting_for_what: null,
+          expected_date: null,
+          due_date: null,
+          committed_date: null,
+        },
+      ],
+      source_link: [{ id: "sl-1", work_item_id: "wi-1", source_type: "WHATSAPP", external_id: "chat-1", occurred_at: "2026-08-01" }],
+    });
+    const ai = fakeAIProvider({ relevance: "WORK", classification: "ACTION", next_action: "Mandar el precio", confidence: "HIGH" });
+    const entry = await processZapiaConversation({ supabase: supabase as any, aiProvider: ai, todayISO: "2026-08-10" }, unit());
+    expect(entry.outcome).toBe("auto_updated");
+    const updated = supabase.tables.work_item.find((w) => w.id === "wi-1");
+    expect(updated?.next_action).toBe("Mandar el precio");
+    const logRows = supabase.tables.ai_action_log;
+    expect(logRows).toHaveLength(1);
+    expect(logRows[0]?.action).toBe("UPDATE");
+    expect(logRows[0]?.changed_fields).toEqual(["next_action"]);
+  });
+
+  it("with whatsapp_auto_enabled=true, never overwrites a field that already has a different value — falls back to Review", async () => {
+    const supabase = makeFakeSupabase({
+      automation_settings: [{ whatsapp_auto_enabled: true }],
+      work_item: [
+        {
+          id: "wi-1",
+          title: "Cliente A - Trafo",
+          status: "OPEN",
+          next_action: "Accion original",
+          waiting_for_what: null,
+          expected_date: null,
+          due_date: null,
+          committed_date: null,
+        },
+      ],
+      source_link: [{ id: "sl-1", work_item_id: "wi-1", source_type: "WHATSAPP", external_id: "chat-1", occurred_at: "2026-08-01" }],
+    });
+    const ai = fakeAIProvider({ relevance: "WORK", classification: "ACTION", next_action: "Accion distinta", confidence: "HIGH" });
+    const entry = await processZapiaConversation({ supabase: supabase as any, aiProvider: ai, todayISO: "2026-08-10" }, unit());
+    expect(entry.outcome).toBe("review_created");
+    const untouched = supabase.tables.work_item.find((w) => w.id === "wi-1");
+    expect(untouched?.next_action).toBe("Accion original");
   });
 });

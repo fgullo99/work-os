@@ -13,8 +13,12 @@ import { processZapiaConversation, type ZapiaConversationLogEntry } from "@/lib/
  * completa con direccion por mensaje, no una sola frase). Exento del gate de sesion en
  * src/middleware.ts, igual que /api/gmail/sync y /api/capture/whatsapp.
  *
- * Zapia es SOURCE/INGESTION unicamente: este endpoint nunca crea ni actualiza un Work Item
- * directo. Todo lo que no sea IGNORE termina en Review (ver zapiaDecision.ts).
+ * Zapia es SOURCE/INGESTION unicamente: la decision de WORK/PERSONAL y de que clasificacion
+ * corresponde la toma siempre el Normalizer de Work OS, nunca Zapia. Por default (AI
+ * Automation OFF para WhatsApp, automation_settings.whatsapp_auto_enabled=false) todo lo que
+ * no sea IGNORE termina en Review — si se habilita el toggle en Settings, lo que pase el gate
+ * estructural (WORK + HIGH + evidencia clara) se crea/actualiza automaticamente (ver
+ * zapiaDecision.ts / automationGate.ts), igual que Gmail.
  */
 export async function POST(request: Request) {
   const expectedToken = process.env.ZAPIA_WEBHOOK_SECRET;
@@ -46,6 +50,8 @@ export async function POST(request: Request) {
     processed: 0,
     ignored: 0,
     review_created: 0,
+    auto_created: 0,
+    auto_updated: 0,
     duplicates: 0,
     failed: 0,
   };
@@ -75,6 +81,14 @@ export async function POST(request: Request) {
       case "review_created":
         summary.processed += 1;
         summary.review_created += 1;
+        break;
+      case "auto_created":
+        summary.processed += 1;
+        summary.auto_created += 1;
+        break;
+      case "auto_updated":
+        summary.processed += 1;
+        summary.auto_updated += 1;
         break;
     }
   }

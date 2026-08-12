@@ -11,6 +11,9 @@ interface SyncSummaryView {
   reviewItems: number;
   ignored: number;
   errors: number;
+  autoCreated?: number;
+  autoUpdated?: number;
+  personalFiltered?: number;
 }
 
 interface ImportPreviewView {
@@ -25,6 +28,9 @@ interface ImportPreviewView {
   highConfidence: number;
   review: number;
   possibleDuplicates: number;
+  personal: number;
+  autoCreated: number;
+  autoUpdated: number;
 }
 
 interface StatusResponse {
@@ -50,7 +56,7 @@ export function GmailConnectPanel() {
   const router = useRouter();
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [range, setRange] = useState<7 | 14 | 30>(7);
+  const [range, setRange] = useState<7 | 14 | 30 | 60 | 90>(7);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ImportPreviewView | null>(null);
 
@@ -102,22 +108,6 @@ export function GmailConnectPanel() {
       setPreview(null);
       await loadStatus();
       router.refresh();
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleToggleSafeMode() {
-    if (!status) return;
-    const next = !status.safeMode;
-    setLoading(true);
-    try {
-      await fetch("/api/gmail/safe-mode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
-      });
-      await loadStatus();
     } finally {
       setLoading(false);
     }
@@ -210,7 +200,7 @@ export function GmailConnectPanel() {
             ultimos 7 dias.
           </p>
           <div className="mt-2 flex gap-2">
-            {([7, 14, 30] as const).map((d) => (
+            {([7, 14, 30, 60, 90] as const).map((d) => (
               <button
                 key={d}
                 type="button"
@@ -248,6 +238,9 @@ export function GmailConnectPanel() {
             <div>High confidence: {preview.highConfidence}</div>
             <div>Review: {preview.review}</div>
             <div>Possible duplicates: {preview.possibleDuplicates}</div>
+            <div>Personal: {preview.personal}</div>
+            <div>Auto created: {preview.autoCreated}</div>
+            <div>Auto updated: {preview.autoUpdated}</div>
           </div>
           <p className="mt-2 text-xs text-ink-500">
             Nada de esto entro solo al Dashboard. Revisa las sugerencias en la seccion Review.
@@ -269,22 +262,15 @@ export function GmailConnectPanel() {
               <div>HIGH ITEMS: {status.lastSyncSummary.highItems}</div>
               <div>REVIEW ITEMS: {status.lastSyncSummary.reviewItems}</div>
               <div>IGNORED: {status.lastSyncSummary.ignored}</div>
+              <div>AUTO CREATED: {status.lastSyncSummary.autoCreated ?? 0}</div>
+              <div>AUTO UPDATED: {status.lastSyncSummary.autoUpdated ?? 0}</div>
+              <div>PERSONAL: {status.lastSyncSummary.personalFiltered ?? 0}</div>
             </div>
           )}
 
-          <div className="mt-3 flex items-center justify-between rounded-md border border-ink-100 px-3 py-2">
-            <div>
-              <p className="text-sm font-medium text-ink-800">Safe Mode</p>
-              <p className="text-xs text-ink-400">
-                {status.safeMode === false
-                  ? "Desactivado: HIGH crea/actualiza automaticamente, MEDIUM sigue yendo a Review."
-                  : "Activado: nada se crea ni actualiza solo, todo va a Review."}
-              </p>
-            </div>
-            <button type="button" disabled={loading} onClick={handleToggleSafeMode} className="btn-secondary shrink-0">
-              {status.safeMode === false ? "Activar" : "Desactivar"}
-            </button>
-          </div>
+          <p className="mt-3 text-xs text-ink-400">
+            AI Automation de Gmail se controla desde el panel &quot;AI Automation&quot; mas abajo en Settings.
+          </p>
 
           <div className="mt-3 flex flex-wrap gap-2">
             <button type="button" disabled={loading} onClick={handleSyncNow} className="btn-secondary">
@@ -295,9 +281,8 @@ export function GmailConnectPanel() {
             </button>
           </div>
           <p className="mt-3 text-xs text-ink-400">
-            Next sync: no hay cron activo todavia. Usa &quot;Sync now&quot; manualmente, o configura un cron externo
-            que llame a <code>POST /api/gmail/sync</code> con el header <code>Authorization: Bearer
-            &lt;CRON_SECRET&gt;</code> (cada 10 minutos es un buen default) — ver README.
+            Next sync: Vercel Cron corre automaticamente todos los dias a las 7:00 ART (configurado en{" "}
+            <code>vercel.json</code>). Usa &quot;Sync now&quot; si queres forzar una sincronizacion antes de esa hora.
           </p>
         </div>
       )}
