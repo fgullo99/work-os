@@ -243,7 +243,12 @@ export async function processZapiaConversation(
       directionConsistent: lastMessage?.direction !== "unknown",
       hasAmbiguousMatch: duplicateCandidateIds.length > 1,
     });
-    const changedFields = existingWorkItem ? safeFieldsToFill(resolvedTracked, existingWorkItem) : [];
+    // classification se pasa ademas de los TRACKED_FIELDS: safeFieldsToFill lo usa para
+    // detectar la transicion ACTION resuelta -> WAITING (ver decisionEngine.ts), mismo
+    // criterio que Gmail.
+    const changedFields = existingWorkItem
+      ? safeFieldsToFill({ ...resolvedTracked, classification: raw.classification }, existingWorkItem)
+      : [];
     // Igual que Gmail: si aplicar esto pisaria un campo YA cargado con un valor distinto,
     // nunca es auto-aplicable — va a Review sin importar que changedFields de vacio.
     const hasConflict = existingWorkItem ? wouldOverwriteExistingValue(resolvedTracked, existingWorkItem) : false;

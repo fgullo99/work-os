@@ -254,4 +254,85 @@ describe("decideAction", () => {
     });
     expect(plan.type).toBe("CREATE_WORK_ITEM");
   });
+
+  it("HIGH + existing + nada nuevo para llenar y sin conflicto -> NO_OP, no Review", () => {
+    const plan = decideAction({
+      classification: classification({ confidence: "HIGH", classification: "WAITING", next_action: null, waiting_for_what: null }),
+      existingWorkItem: workItem({ waiting_for_what: "Cotizacion de MBT" }),
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: true,
+    });
+    expect(plan.type).toBe("NO_OP");
+  });
+
+  it("HIGH + existing + transicion ACTION resuelta -> WAITING: limpia next_action viejo sin pasar por Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        confidence: "HIGH",
+        classification: "WAITING",
+        next_action: null,
+        waiting_for_what: "Cotizacion de MBT",
+      }),
+      existingWorkItem: workItem({ next_action: "Enviar SLD a MBT", waiting_for_what: null }),
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: true,
+    });
+    expect(plan.type).toBe("UPDATE_WORK_ITEM_SAFE");
+    if (plan.type === "UPDATE_WORK_ITEM_SAFE") {
+      expect(plan.fieldsToFill).toContain("next_action");
+      expect(plan.fieldsToFill).toContain("waiting_for_what");
+    }
+  });
+
+  it("HIGH + existing + waiting_for_what YA en conflicto -> la transicion ACTION->WAITING no evita Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        confidence: "HIGH",
+        classification: "WAITING",
+        next_action: null,
+        waiting_for_what: "Nueva descripcion distinta",
+      }),
+      existingWorkItem: workItem({ next_action: "Enviar SLD a MBT", waiting_for_what: "Descripcion original" }),
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: true,
+    });
+    expect(plan.type).toBe("REVIEW_UPDATE_WORK_ITEM");
+  });
+
+  it("sin existing + INFO sin next_action/waiting_for_what/committed_date -> IGNORE, no Review", () => {
+    const plan = decideAction({
+      classification: classification({
+        confidence: "HIGH",
+        classification: "INFO",
+        next_action: null,
+        waiting_for_what: null,
+        committed_date: null,
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("IGNORE");
+  });
+
+  it("sin existing + INFO pero CON next_action -> sigue el camino normal (CREATE_WORK_ITEM), no se ignora", () => {
+    const plan = decideAction({
+      classification: classification({
+        confidence: "HIGH",
+        classification: "INFO",
+        next_action: "Revisar propuesta",
+        waiting_for_what: null,
+        committed_date: null,
+      }),
+      existingWorkItem: null,
+      duplicateCandidateIds: [],
+      hasNewInboundSinceLastSync: false,
+      lastMessageIsOutbound: false,
+    });
+    expect(plan.type).toBe("CREATE_WORK_ITEM");
+  });
 });

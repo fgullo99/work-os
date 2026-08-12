@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { getReconciliationCandidates, reconcileCandidate, type ReconcileDeps } from "./reconcile";
+import { getReconciliationCandidates, reconcileCandidate, classifyThreadOutcome, type ReconcileDeps } from "./reconcile";
 import type { WorkItemRow } from "@/lib/supabase/types";
 import type { AIProvider, EmailThreadResult } from "@/lib/ai";
+import type { ThreadSyncLogEntry } from "./applySync";
 
 type Row = Record<string, unknown>;
 
@@ -381,5 +382,67 @@ describe("reconcileCandidate — idempotencia (AI Work Manager no paga IA de mas
 
     const updatedWorkItem = supabase.tables.work_item!.find((r) => r.id === "wi-1")!;
     expect(updatedWorkItem.last_reconciled_thread_version).toBe("h2");
+  });
+});
+
+function logEntry(overrides: Partial<ThreadSyncLogEntry> = {}): ThreadSyncLogEntry {
+  return {
+    threadId: "t-1",
+    subject: "Asunto",
+    ruleFilterSkipped: false,
+    ruleFilterReason: null,
+    llmCalled: true,
+    relevance: "WORK",
+    classification: "ACTION",
+    confidence: "HIGH",
+    isDelegation: false,
+    action: "AUTO_CREATE",
+    ...overrides,
+  };
+}
+
+describe("classifyThreadOutcome — un balde mutuamente excluyente por thread, para las metricas DE ESTA CORRIDA", () => {
+  it("rule-filtered (nunca llego a la IA) -> RULE_FILTERED, sin importar action", () => {
+    expect(classifyThreadOutcome(logEntry({ ruleFilterSkipped: true, llmCalled: false, action: "IGNORE (rule filter)" }))).toBe(
+      "RULE_FILTERED"
+    );
+  });
+
+  it("action=ERROR -> FAILED, incluso si por algun motivo ruleFilterSkipped quedo en false", () => {
+    expect(classifyThreadOutcome(logEntry({ action: "ERROR" }))).toBe("FAILED");
+  });
+
+  it("AUTO_CREATE -> AUTO_CREATED", () => {
+    expect(classifyThreadOutcome(logEntry({ action: "AUTO_CREATE" }))).toBe("AUTO_CREATED");
+  });
+
+  it("AUTO_UPDATE -> AUTO_UPDATED", () => {
+    expect(classifyThreadOutcome(logEntry({ action: "AUTO_UPDATE" }))).toBe("AUTO_UPDATED");
+  });
+
+  it("NO_OP -> NO_OP", () => {
+    expect(classifyThreadOutcome(logEntry({ action: "NO_OP" }))).toBe("NO_OP");
+  });
+
+  it("RECEIVED_CHECK -> REVIEW_CREATED (siempre crea un review_item, nunca se auto-aplica)", () => {
+    expect(classifyThreadOutcome(logEntry({ action: "RECEIVED_CHECK" }))).toBe("REVIEW_CREATED");
+  });
+
+  it.each(["REVIEW_UPDATE_WORK_ITEM", "REVIEW_NEW_WORK_ITEM", "REVIEW_POSSIBLE_DUPLICATE", "REVIEW_POTENTIAL_COMMITMENT"])(
+    "%s -> REVIEW_CREATED",
+    (action) => {
+      expect(classifyThreadOutcome(logEntry({ action }))).toBe("REVIEW_CREATED");
+    }
+  );
+
+  it.each(["WOULD_CREATE (automation off)", "WOULD_UPDATE (automation off)"])(
+    "%s (safe_mode) -> REVIEW_CREATED (es lo que realmente paso en la DB esta corrida)",
+    (action) => {
+      expect(classifyThreadOutcome(logEntry({ action }))).toBe("REVIEW_CREATED");
+    }
+  );
+
+  it("IGNORE (classification=IGNORE / relevance=PERSONAL / INFO sin accionable) -> IGNORED", () => {
+    expect(classifyThreadOutcome(logEntry({ action: "IGNORE" }))).toBe("IGNORED");
   });
 });

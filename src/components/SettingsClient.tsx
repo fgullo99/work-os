@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { CompanyRow, ContactRow, ContactTier, ContextRow } from "@/lib/supabase/types";
 import { AppShell } from "./AppShell";
 import { GmailConnectPanel } from "./GmailConnectPanel";
+import { GmailCatchupPanel } from "./GmailCatchupPanel";
 import { WhatsAppStatusPanel } from "./WhatsAppStatusPanel";
 import { CalendarStatusPanel } from "./CalendarStatusPanel";
 import { AiEnginePanel } from "./AiEnginePanel";
@@ -60,6 +61,7 @@ export function SettingsClient({
           <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-400">Integrations</p>
           <div className="space-y-4">
             <GmailConnectPanel />
+            <GmailCatchupPanel />
             <WhatsAppStatusPanel />
             <CalendarStatusPanel />
           </div>

@@ -212,6 +212,25 @@ export async function processThread(deps: ApplySyncDeps, thread: NormalizedThrea
     case "IGNORE":
       break;
 
+    case "NO_OP": {
+      // Hubo actividad en el thread pero no cambia el estado del Work Item (ej. un "sigo
+      // esperando" repetido). Se refresca last_activity_at/ai_summary y se deja evidencia
+      // (source_link) de que se reviso, pero sin ai_action_log — no hay nada que un Undo
+      // pueda revertir porque no se cambio ningun campo de negocio.
+      log.resultingWorkItemId = plan.workItemId;
+      const { error } = await deps.supabase
+        .from("work_item")
+        .update({
+          last_activity_at: new Date().toISOString(),
+          last_message_direction: latestMessage?.direction ?? null,
+          ai_summary: raw.summary,
+        })
+        .eq("id", plan.workItemId);
+      if (error) throw error;
+      await createSourceLinkForThread(deps.supabase, plan.workItemId, thread, latestMessage);
+      break;
+    }
+
     case "RECEIVED_CHECK":
       log.resultingWorkItemId = plan.workItemId;
       await upsertReviewItem(deps.supabase, {

@@ -28,6 +28,7 @@ export interface DecisionInput {
 
 export type ActionPlan =
   | { type: "IGNORE"; reason: string }
+  | { type: "NO_OP"; workItemId: string }
   | { type: "RECEIVED_CHECK"; workItemId: string }
   | { type: "CREATE_WORK_ITEM" }
   | { type: "UPDATE_WORK_ITEM_SAFE"; workItemId: string; fieldsToFill: TrackedField[] }
@@ -40,12 +41,31 @@ export const TRACKED_FIELDS = ["next_action", "waiting_for_what", "due_date", "e
 export type TrackedField = (typeof TRACKED_FIELDS)[number];
 
 /** Exportada para reuso desde src/lib/whatsapp/zapiaPipeline.ts — mismo criterio de "solo
- * llenar campos vacios" para los dos canales, un solo lugar de verdad. */
+ * llenar campos vacios" para los dos canales, un solo lugar de verdad.
+ *
+ * Excepcion deliberada, acotada: transicion ACTION resuelta -> WAITING. Si el usuario ya
+ * tenia un next_action pendiente y el thread ahora vuelve WAITING con next_action=null Y
+ * un waiting_for_what concreto, el next_action viejo quedo obsoleto (el usuario ya hizo su
+ * parte) — es seguro limpiarlo a null porque sigue siendo un campo de la lista blanca
+ * (SAFE_AUTO_UPDATE_FIELDS) y la señal que lo dispara es inequivoca (la propia
+ * clasificacion dejo de reportar next_action). No toca waiting_for_what si ya tenia un
+ * valor en conflicto — eso lo sigue bloqueando wouldOverwriteExistingValue como antes. */
 export function safeFieldsToFill(
-  classification: Pick<ResolvedClassification, TrackedField>,
+  classification: Pick<ResolvedClassification, TrackedField | "classification">,
   existing: WorkItemRow
 ): TrackedField[] {
-  return TRACKED_FIELDS.filter((f) => existing[f] === null && classification[f] !== null);
+  const filled = TRACKED_FIELDS.filter((f) => existing[f] === null && classification[f] !== null);
+
+  const actionResolvedIntoWaiting =
+    classification.classification === "WAITING" &&
+    existing.next_action !== null &&
+    classification.next_action === null &&
+    classification.waiting_for_what !== null;
+  if (actionResolvedIntoWaiting && !filled.includes("next_action")) {
+    filled.push("next_action");
+  }
+
+  return filled;
 }
 
 /** true si aplicar la clasificacion nueva pisaria un valor YA cargado con uno distinto.
@@ -99,14 +119,31 @@ export function decideAction(input: DecisionInput): ActionPlan {
     if (classification.relevance === "UNCERTAIN") {
       return { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: existingWorkItem.id };
     }
-    return {
-      type: "UPDATE_WORK_ITEM_SAFE",
-      workItemId: existingWorkItem.id,
-      fieldsToFill: safeFieldsToFill(classification, existingWorkItem),
-    };
+    const fieldsToFill = safeFieldsToFill(classification, existingWorkItem);
+    // Nada nuevo que llenar y nada en conflicto (ya descartado arriba): el thread tuvo
+    // actividad pero no cambia el estado del Work Item — ej. un "sigo esperando" repetido,
+    // o una confirmacion automatica sin accion. No es Review (no hay ambiguedad real) ni un
+    // UPDATE de verdad (nada cambia) — solo se refresca last_activity_at/ai_summary.
+    if (fieldsToFill.length === 0) {
+      return { type: "NO_OP", workItemId: existingWorkItem.id };
+    }
+    return { type: "UPDATE_WORK_ITEM_SAFE", workItemId: existingWorkItem.id, fieldsToFill };
   }
 
   // No hay Work Item existente para este thread todavia.
+
+  // INFO sin nada accionable (sin next_action/waiting_for_what/committed_date): el modelo
+  // no lo clasifico como IGNORE, pero tampoco dejo nada para crear o revisar — ej. un
+  // thread que la propia IA describe como "ya resuelto", sin ningun campo poblado.
+  if (
+    classification.classification === "INFO" &&
+    classification.next_action === null &&
+    classification.waiting_for_what === null &&
+    classification.committed_date === null
+  ) {
+    return { type: "IGNORE", reason: "classification=INFO sin next_action/waiting_for_what/committed_date (nada accionable)" };
+  }
+
   if (duplicateCandidateIds.length > 0) {
     return { type: "REVIEW_POSSIBLE_DUPLICATE", candidateIds: duplicateCandidateIds };
   }

@@ -55,7 +55,7 @@ describe("buildAssistantObservations", () => {
       newWaitingDiscovered: 1,
       newDelegatedDiscovered: 0,
       newCommitmentsDiscovered: 0,
-      workItemsUpdated: 3,
+      autoUpdatedThisRun: 3,
       waitingReceived: 1,
     });
     const note = observations.find((o) => o.startsWith("La IA"));
@@ -72,7 +72,7 @@ describe("buildAssistantObservations", () => {
       },
     });
     const reviewItems = [{}] as unknown as ReviewItemRow[];
-    const observations = buildAssistantObservations(data, reviewItems, { workItemsUpdated: 1 });
+    const observations = buildAssistantObservations(data, reviewItems, { autoUpdatedThisRun: 1 });
     expect(observations.length).toBeLessThanOrEqual(4);
   });
 });

@@ -48,9 +48,10 @@ describe("applyAutomationGate", () => {
     expect(result.actionLabel).toBe("REVIEW (update fuera de la lista segura)");
   });
 
-  it("no toca REVIEW_*, IGNORE ni RECEIVED_CHECK, sin importar safeMode ni el gate", () => {
+  it("no toca REVIEW_*, IGNORE, NO_OP ni RECEIVED_CHECK, sin importar safeMode ni el gate", () => {
     const plans: ActionPlan[] = [
       { type: "IGNORE", reason: "x" },
+      { type: "NO_OP", workItemId: "wi-6" },
       { type: "RECEIVED_CHECK", workItemId: "wi-4" },
       { type: "REVIEW_NEW_WORK_ITEM" },
       { type: "REVIEW_UPDATE_WORK_ITEM", workItemId: "wi-5" },

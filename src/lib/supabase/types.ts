@@ -221,6 +221,28 @@ export interface GmailThreadReconciliationRow {
   work_item_id: string | null;
 }
 
+export type GmailCatchupStatus = "in_progress" | "completed" | "failed";
+
+export interface GmailCatchupStateRow {
+  id: string;
+  connection_id: string;
+  status: GmailCatchupStatus;
+  thread_queue: string[];
+  cursor_index: number;
+  processed_count: number;
+  auto_created_count: number;
+  auto_updated_count: number;
+  no_op_count: number;
+  review_count: number;
+  ignored_count: number;
+  rule_filtered_count: number;
+  failed_count: number;
+  target_history_id: string | null;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 // Tipos "Insert" escritos como object literals planos (sin Partial<Row> & {...}).
 // IMPORTANTE: @supabase/supabase-js 2.11x + TypeScript 5.9 resuelven el generic
 // `Schema extends GenericSchema ? Schema : never` de SupabaseClient evaluando
@@ -359,6 +381,25 @@ type GmailThreadReconciliationInsert = {
   outcome: string;
   work_item_id?: string | null;
 };
+type GmailCatchupStateInsert = {
+  id?: string;
+  connection_id: string;
+  status?: GmailCatchupStatus;
+  thread_queue?: string[];
+  cursor_index?: number;
+  processed_count?: number;
+  auto_created_count?: number;
+  auto_updated_count?: number;
+  no_op_count?: number;
+  review_count?: number;
+  ignored_count?: number;
+  rule_filtered_count?: number;
+  failed_count?: number;
+  target_history_id?: string | null;
+  started_at?: string;
+  updated_at?: string;
+  completed_at?: string | null;
+};
 type CorrectionLogInsert = {
   id?: string;
   work_item_id: string;
@@ -439,6 +480,12 @@ export interface Database {
         Row: GmailThreadReconciliationRow;
         Insert: GmailThreadReconciliationInsert;
         Update: Partial<GmailThreadReconciliationRow>;
+        Relationships: never[];
+      };
+      gmail_catchup_state: {
+        Row: GmailCatchupStateRow;
+        Insert: GmailCatchupStateInsert;
+        Update: Partial<GmailCatchupStateRow>;
         Relationships: never[];
       };
     };

@@ -97,6 +97,25 @@ function outcomeForEntry(entry: ThreadSyncLogEntry): string {
   return "IGNORED";
 }
 
+export type ThreadOutcomeBucket = "AUTO_CREATED" | "AUTO_UPDATED" | "NO_OP" | "REVIEW_CREATED" | "IGNORED" | "RULE_FILTERED" | "FAILED";
+
+/** Un solo lugar de verdad para clasificar el resultado de un thread en un balde
+ * mutuamente excluyente — usado por runReconciliationSweep para las metricas DE ESTA
+ * CORRIDA (nunca mezcladas con review_item historico, ver seccion "Metricas" del pedido).
+ * RECEIVED_CHECK cuenta como REVIEW_CREATED: applySync.ts siempre crea un review_item para
+ * el, nunca se auto-aplica. WOULD_* (safe_mode=true) tambien cuenta como REVIEW_CREATED:
+ * es lo que realmente paso en la DB esta corrida (un review_item, no un auto-apply real). */
+export function classifyThreadOutcome(entry: ThreadSyncLogEntry): ThreadOutcomeBucket {
+  if (entry.action === "ERROR") return "FAILED";
+  if (entry.ruleFilterSkipped) return "RULE_FILTERED";
+  if (entry.action === "AUTO_CREATE") return "AUTO_CREATED";
+  if (entry.action === "AUTO_UPDATE") return "AUTO_UPDATED";
+  if (entry.action === "NO_OP") return "NO_OP";
+  if (entry.action === "RECEIVED_CHECK") return "REVIEW_CREATED";
+  if (entry.action.startsWith("REVIEW") || entry.action.startsWith("WOULD_")) return "REVIEW_CREATED";
+  return "IGNORED";
+}
+
 export interface ReconcileDeps {
   supabase: DB;
   gmail: gmail_v1.Gmail;
@@ -200,18 +219,37 @@ export interface ReconciliationExample {
 }
 
 export interface ReconciliationSummary {
+  // --- Metricas de ESTA corrida, un balde por thread procesado (mutuamente excluyentes) ---
+  threadsProcessedThisRun: number;
+  autoCreatedThisRun: number;
+  autoUpdatedThisRun: number;
+  noOpThisRun: number;
+  reviewCreatedThisRun: number;
+  ignoredThisRun: number;
+  /** Descartado por el rule filter ANTES de llamar a la IA (newsletter/bulk) — no cuenta en
+   * threadsSuccessfullyClassified ni en las tasas: nunca fue "clasificado". */
+  ruleFilteredThisRun: number;
+  failedThisRun: number;
+  /** autoCreated + autoUpdated + noOp + reviewCreated + ignored — denominador de las tasas.
+   * Excluye ruleFiltered (nunca paso por la IA) y failed (la IA no devolvio nada usable). */
+  threadsSuccessfullyClassified: number;
+  /** (autoCreated + autoUpdated + noOp + ignored) / threadsSuccessfullyClassified, en %.
+   * null si threadsSuccessfullyClassified es 0 (nada que dividir). */
+  autoHandleRate: number | null;
+  /** reviewCreated / threadsSuccessfullyClassified, en %. null si el denominador es 0. */
+  reviewRate: number | null;
+
+  // --- Detalle de dominio (AI Work Manager), para el desglose y los ejemplos ---
   existingItemsReconciled: number;
-  workItemsUpdated: number;
+  unlinkedThreadsAnalyzed: number;
   waitingReceived: number;
   followUps: number;
   possiblyResolved: number;
-  unlinkedThreadsAnalyzed: number;
   newActionsDiscovered: number;
   newWaitingDiscovered: number;
   newDelegatedDiscovered: number;
   newCommitmentsDiscovered: number;
-  review: number;
-  resolvedIgnored: number;
+
   examples: ReconciliationExample[];
 }
 
@@ -249,20 +287,61 @@ export async function runReconciliationSweep(
   };
 
   const summary: ReconciliationSummary = {
+    threadsProcessedThisRun: 0,
+    autoCreatedThisRun: 0,
+    autoUpdatedThisRun: 0,
+    noOpThisRun: 0,
+    reviewCreatedThisRun: 0,
+    ignoredThisRun: 0,
+    ruleFilteredThisRun: 0,
+    failedThisRun: 0,
+    threadsSuccessfullyClassified: 0,
+    autoHandleRate: null,
+    reviewRate: null,
     existingItemsReconciled: 0,
-    workItemsUpdated: 0,
+    unlinkedThreadsAnalyzed: 0,
     waitingReceived: 0,
     followUps: 0,
     possiblyResolved: 0,
-    unlinkedThreadsAnalyzed: 0,
     newActionsDiscovered: 0,
     newWaitingDiscovered: 0,
     newDelegatedDiscovered: 0,
     newCommitmentsDiscovered: 0,
-    review: 0,
-    resolvedIgnored: 0,
     examples: [],
   };
+
+  /** Aplica el resultado de UN thread a las metricas de esta corrida — un solo lugar de
+   * verdad para que existing/unlinked queden en los mismos baldes mutuamente excluyentes
+   * (ver classifyThreadOutcome). Nunca toca datos historicos (review_item preexistente,
+   * ai_action_log de corridas pasadas) — eso queda deliberadamente fuera de este summary. */
+  function recordOutcome(entry: ThreadSyncLogEntry): void {
+    summary.threadsProcessedThisRun += 1;
+    const bucket = classifyThreadOutcome(entry);
+    switch (bucket) {
+      case "AUTO_CREATED":
+        summary.autoCreatedThisRun += 1;
+        break;
+      case "AUTO_UPDATED":
+        summary.autoUpdatedThisRun += 1;
+        break;
+      case "NO_OP":
+        summary.noOpThisRun += 1;
+        break;
+      case "REVIEW_CREATED":
+        summary.reviewCreatedThisRun += 1;
+        break;
+      case "IGNORED":
+        summary.ignoredThisRun += 1;
+        break;
+      case "RULE_FILTERED":
+        summary.ruleFilteredThisRun += 1;
+        break;
+      case "FAILED":
+        summary.failedThisRun += 1;
+        break;
+    }
+    if (entry.action === "RECEIVED_CHECK") summary.waitingReceived += 1;
+  }
 
   let processedCount = 0;
 
@@ -281,13 +360,9 @@ export async function runReconciliationSweep(
     processedCount += 1;
     summary.existingItemsReconciled += 1;
     const e = result.entry;
-    if (!e) continue;
+    if (!e) continue; // fingerprint sin cambios — ya se conto en reconcileCandidate, no gasto IA, no es un thread "procesado" para las metricas de este run
 
-    if (e.action === "AUTO_UPDATE" || e.action.startsWith("REVIEW_UPDATE") || e.action.startsWith("WOULD_UPDATE")) {
-      summary.workItemsUpdated += 1;
-    }
-    if (e.action === "RECEIVED_CHECK") summary.waitingReceived += 1;
-    if (e.action.startsWith("REVIEW") || e.action.startsWith("WOULD_")) summary.review += 1;
+    recordOutcome(e);
 
     if (summary.examples.length < MAX_EXAMPLES) {
       summary.examples.push({
@@ -316,9 +391,9 @@ export async function runReconciliationSweep(
     }
     if (!entry) continue; // salteado: chequeado hace poco, o sin cambios desde la ultima vez
     processedCount += 1;
-    if (!entry.llmCalled) continue; // rule-filtered (newsletter/bulk) — no cuenta como "analizado"
 
-    summary.unlinkedThreadsAnalyzed += 1;
+    recordOutcome(entry);
+    if (entry.llmCalled) summary.unlinkedThreadsAnalyzed += 1;
 
     const isCreateLike = entry.action === "AUTO_CREATE" || entry.action.startsWith("REVIEW_NEW") || entry.action.startsWith("WOULD_CREATE");
     if (isCreateLike) {
@@ -327,8 +402,6 @@ export async function runReconciliationSweep(
       else if (entry.classification === "WAITING") summary.newWaitingDiscovered += 1;
       else if (entry.classification === "COMMITMENT") summary.newCommitmentsDiscovered += 1;
     }
-    if (entry.action.startsWith("REVIEW") || entry.action.startsWith("WOULD_")) summary.review += 1;
-    if (entry.classification === "IGNORE" || entry.relevance === "PERSONAL") summary.resolvedIgnored += 1;
 
     if (summary.examples.length < MAX_EXAMPLES) {
       summary.examples.push({
@@ -342,6 +415,14 @@ export async function runReconciliationSweep(
         reason: entry.rationale ?? null,
       });
     }
+  }
+
+  summary.threadsSuccessfullyClassified =
+    summary.autoCreatedThisRun + summary.autoUpdatedThisRun + summary.noOpThisRun + summary.reviewCreatedThisRun + summary.ignoredThisRun;
+  if (summary.threadsSuccessfullyClassified > 0) {
+    const autoHandled = summary.autoCreatedThisRun + summary.autoUpdatedThisRun + summary.noOpThisRun + summary.ignoredThisRun;
+    summary.autoHandleRate = Math.round((autoHandled / summary.threadsSuccessfullyClassified) * 1000) / 10;
+    summary.reviewRate = Math.round((summary.reviewCreatedThisRun / summary.threadsSuccessfullyClassified) * 1000) / 10;
   }
 
   await updateLastReconciliationSummary(supabase, connection.id, summary as unknown as Record<string, unknown>);

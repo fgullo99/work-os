@@ -58,7 +58,7 @@ export function buildAssistantObservations(
 function buildReconciliationObservation(summary: Record<string, unknown> | null | undefined): string | null {
   if (!summary) return null;
 
-  const workItemsUpdated = Number(summary.workItemsUpdated ?? 0);
+  const autoUpdated = Number(summary.autoUpdatedThisRun ?? 0);
   const waitingReceived = Number(summary.waitingReceived ?? 0);
   const newItems =
     Number(summary.newActionsDiscovered ?? 0) +
@@ -68,7 +68,7 @@ function buildReconciliationObservation(summary: Record<string, unknown> | null 
 
   const parts: string[] = [];
   if (newItems > 0) parts.push(`encontro ${newItems} pendiente${newItems === 1 ? "" : "s"} nuevo${newItems === 1 ? "" : "s"} en Gmail`);
-  if (workItemsUpdated > 0) parts.push(`actualizo ${workItemsUpdated} item${workItemsUpdated === 1 ? "" : "s"}`);
+  if (autoUpdated > 0) parts.push(`actualizo ${autoUpdated} item${autoUpdated === 1 ? "" : "s"}`);
   if (waitingReceived > 0) parts.push(`detecto respuesta en ${waitingReceived} espera${waitingReceived === 1 ? "" : "s"}`);
 
   if (parts.length === 0) return null;
