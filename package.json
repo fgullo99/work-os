@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "eval:normalizer": "tsx scripts/eval-normalizer.ts",
     "eval:gmail-normalizer": "tsx scripts/eval-gmail-normalizer.ts",
+    "eval:case-analyzer": "tsx scripts/eval-case-analyzer.ts",
     "seed": "tsx --env-file=.env.local scripts/seed.ts",
     "seed:cleanup": "tsx --env-file=.env.local scripts/seed-cleanup.ts",
     "check:setup": "tsx scripts/check-setup.ts"

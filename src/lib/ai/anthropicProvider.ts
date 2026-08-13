@@ -6,8 +6,11 @@ import { emailThreadResultSchema, type EmailThreadResult } from "./emailSchema";
 import { buildEmailThreadSystemPrompt } from "./emailPrompt";
 import { whatsappConversationResultSchema, type WhatsAppConversationResult } from "./whatsappSchema";
 import { buildWhatsAppConversationSystemPrompt } from "./whatsappPrompt";
+import { caseStateResultSchema, type CaseStateResult } from "./caseSchema";
+import { buildCaseStateSystemPrompt } from "./casePrompt";
 import { buildThreadContextText } from "@/lib/gmail/contextWindow";
 import { buildWhatsAppContextText } from "@/lib/whatsapp/whatsappContext";
+import { buildCaseHistoryText } from "@/lib/cases/caseHistoryText";
 import {
   AINormalizationError,
   type AiUsage,
@@ -15,6 +18,7 @@ import {
   type NormalizeEmailThreadInput,
   type NormalizeManualCaptureInput,
   type NormalizeWhatsAppConversationInput,
+  type NormalizeCaseStateInput,
 } from "./types";
 
 export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
@@ -22,6 +26,7 @@ export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 const MANUAL_TOOL_NAME = "record_classification";
 const EMAIL_TOOL_NAME = "record_email_classification";
 const WHATSAPP_TOOL_NAME = "record_whatsapp_classification";
+const CASE_TOOL_NAME = "record_case_state";
 
 // Mantenidos sincronizados a mano con manualCaptureResultSchema/emailThreadResultSchema.
 // No se generan automaticamente para no agregar una dependencia (zod-to-json-schema)
@@ -164,6 +169,52 @@ const WHATSAPP_TOOL_INPUT_SCHEMA = {
   ],
 } as const;
 
+const CASE_TOOL_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    case_title: { type: "string" },
+    reference_type: {
+      type: ["string", "null"],
+      enum: ["QUOTE", "PURCHASE_ORDER", "RFQ", "PROJECT", "INVOICE", "SALES_ORDER", "OTHER", null],
+    },
+    reference_value: { type: ["string", "null"] },
+    current_state: {
+      type: "string",
+      enum: ["ACTION_ME", "WAITING_EXTERNAL", "DELEGATED_INTERNAL", "BLOCKED", "NO_ACTION", "CLOSED", "REVIEW"],
+    },
+    current_owner: { type: "string", enum: ["FELIPE", "TEAM", "EXTERNAL", "NONE", "UNKNOWN"] },
+    felipe_action_required: { type: "boolean" },
+    next_action: { type: ["string", "null"] },
+    waiting_for: { type: ["string", "null"] },
+    responsible: { type: ["string", "null"] },
+    due_date_phrase: { type: ["string", "null"] },
+    expected_date_phrase: { type: ["string", "null"] },
+    last_meaningful_event: { type: "string" },
+    risk: { type: "string", enum: ["NORMAL", "AT_RISK"] },
+    confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
+    closure_evidence_unambiguous: { type: "boolean" },
+    summary: { type: "string" },
+  },
+  required: [
+    "case_title",
+    "reference_type",
+    "reference_value",
+    "current_state",
+    "current_owner",
+    "felipe_action_required",
+    "next_action",
+    "waiting_for",
+    "responsible",
+    "due_date_phrase",
+    "expected_date_phrase",
+    "last_meaningful_event",
+    "risk",
+    "confidence",
+    "closure_evidence_unambiguous",
+    "summary",
+  ],
+} as const;
+
 export class AnthropicProvider implements AIProvider {
   private client: Anthropic;
   private model: string;
@@ -294,6 +345,25 @@ export class AnthropicProvider implements AIProvider {
       toolDescription: "Registra la clasificacion estructurada de la conversacion de WhatsApp.",
       toolInputSchema: WHATSAPP_TOOL_INPUT_SCHEMA,
       zodSchema: whatsappConversationResultSchema,
+      onUsage,
+    });
+  }
+
+  async analyzeCaseState(input: NormalizeCaseStateInput, onUsage?: (usage: AiUsage) => void): Promise<CaseStateResult> {
+    const historyText = buildCaseHistoryText(
+      input.caseTitle,
+      input.referenceLabel,
+      input.entries,
+      input.internalTeamMembers,
+      input.existing
+    );
+    return this.callToolWithRetry({
+      system: buildCaseStateSystemPrompt(input.currentDateISO),
+      userContent: historyText,
+      toolName: CASE_TOOL_NAME,
+      toolDescription: "Registra el estado actual del Case (asunto de trabajo) analizado.",
+      toolInputSchema: CASE_TOOL_INPUT_SCHEMA,
+      zodSchema: caseStateResultSchema,
       onUsage,
     });
   }

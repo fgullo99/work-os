@@ -35,6 +35,18 @@ export type ReviewItemStatus = "PENDING" | "ACCEPTED" | "APPLIED" | "IGNORED";
 export type ReviewItemFeedback = "CORRECT" | "WRONG" | "NOT_IMPORTANT" | "PERSONAL";
 export type WhatsAppIngestionStatus = "RECEIVED" | "PROCESSED" | "IGNORED" | "ERROR";
 
+// --- Pivot a Case (ver supabase/schema_case.sql, Fase 1) ---
+export type CaseCurrentState =
+  | "ACTION_ME"
+  | "WAITING_EXTERNAL"
+  | "DELEGATED_INTERNAL"
+  | "BLOCKED"
+  | "NO_ACTION"
+  | "CLOSED"
+  | "REVIEW";
+export type CaseCurrentOwner = "FELIPE" | "TEAM" | "EXTERNAL" | "NONE" | "UNKNOWN";
+export type CaseRiskLevel = "NORMAL" | "AT_RISK";
+
 export interface CompanyRow {
   id: string;
   name: string;
@@ -122,6 +134,55 @@ export interface SourceLinkRow {
   raw_excerpt: string | null;
   raw_metadata: Record<string, unknown> | null;
   direction: SourceDirection | null;
+  occurred_at: string;
+  is_demo: boolean;
+  created_at: string;
+}
+
+/** Ver supabase/schema_case.sql — pivot a Case (Fase 1). Un Case representa un asunto de
+ * trabajo real (una cotizacion, una OC, un proyecto), no un email/thread individual. */
+export interface CaseRow {
+  id: string;
+  title: string;
+  company_id: string | null;
+  contact_id: string | null;
+  context_id: string | null;
+  reference_type: string | null;
+  reference_value: string | null;
+  current_state: CaseCurrentState;
+  current_owner: CaseCurrentOwner;
+  felipe_action_required: boolean;
+  next_action: string | null;
+  waiting_for: string | null;
+  responsible: string | null;
+  due_date: string | null;
+  expected_date: string | null;
+  risk: CaseRiskLevel;
+  confidence: AiConfidence | null;
+  ai_summary: string | null;
+  last_meaningful_event: string | null;
+  last_activity_at: string;
+  ai_calls_count: number;
+  ai_input_tokens: number;
+  ai_output_tokens: number;
+  is_demo: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Mirror de SourceLinkRow, pero FK a case_id — ver nota en schema_case.sql sobre por que es
+ * una tabla separada en vez de agregar case_id nullable a source_link. */
+export interface CaseSourceLinkRow {
+  id: string;
+  case_id: string;
+  source_type: SourceType;
+  external_id: string | null;
+  external_message_id: string | null;
+  external_url: string | null;
+  raw_excerpt: string | null;
+  raw_metadata: Record<string, unknown> | null;
+  direction: SourceDirection | null;
+  event_label: string | null;
   occurred_at: string;
   is_demo: boolean;
   created_at: string;
@@ -454,6 +515,49 @@ type SourceLinkInsert = {
   is_demo?: boolean;
   created_at?: string;
 };
+type CaseInsert = {
+  id?: string;
+  title: string;
+  company_id?: string | null;
+  contact_id?: string | null;
+  context_id?: string | null;
+  reference_type?: string | null;
+  reference_value?: string | null;
+  current_state?: CaseCurrentState;
+  current_owner?: CaseCurrentOwner;
+  felipe_action_required?: boolean;
+  next_action?: string | null;
+  waiting_for?: string | null;
+  responsible?: string | null;
+  due_date?: string | null;
+  expected_date?: string | null;
+  risk?: CaseRiskLevel;
+  confidence?: AiConfidence | null;
+  ai_summary?: string | null;
+  last_meaningful_event?: string | null;
+  last_activity_at?: string;
+  ai_calls_count?: number;
+  ai_input_tokens?: number;
+  ai_output_tokens?: number;
+  is_demo?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+type CaseSourceLinkInsert = {
+  id?: string;
+  case_id: string;
+  source_type: SourceType;
+  external_id?: string | null;
+  external_message_id?: string | null;
+  external_url?: string | null;
+  raw_excerpt?: string | null;
+  raw_metadata?: Record<string, unknown> | null;
+  direction?: SourceDirection | null;
+  event_label?: string | null;
+  occurred_at?: string;
+  is_demo?: boolean;
+  created_at?: string;
+};
 
 // @supabase/postgrest-js (v2.x) exige que cada tabla tenga `Relationships` y que el
 // schema tenga `Views`/`Functions`, aunque esten vacios (ver GenericTable/GenericSchema
@@ -519,6 +623,13 @@ export interface Database {
         Row: GmailCatchupStateRow;
         Insert: GmailCatchupStateInsert;
         Update: Partial<GmailCatchupStateRow>;
+        Relationships: never[];
+      };
+      case: { Row: CaseRow; Insert: CaseInsert; Update: Partial<CaseRow>; Relationships: never[] };
+      case_source_link: {
+        Row: CaseSourceLinkRow;
+        Insert: CaseSourceLinkInsert;
+        Update: Partial<CaseSourceLinkRow>;
         Relationships: never[];
       };
     };

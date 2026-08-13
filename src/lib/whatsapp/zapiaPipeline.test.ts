@@ -46,6 +46,9 @@ function fakeAIProvider(result: Partial<WhatsAppConversationResult> | ((input: N
       ...base,
       ...(typeof result === "function" ? result(input) : result),
     }),
+    analyzeCaseState: async () => {
+      throw new Error("not used in these tests");
+    },
     getModel: () => "test-model",
   };
 }
@@ -349,6 +352,9 @@ describe("processZapiaConversation", () => {
           summary: "resumen",
         };
       },
+      analyzeCaseState: async () => {
+        throw new Error("unused");
+      },
       getModel: () => "test-model",
     };
 
@@ -388,6 +394,9 @@ describe("processZapiaConversation", () => {
       normalizeWhatsAppConversation: async () => {
         throw new Error("Anthropic no disponible");
       },
+      analyzeCaseState: async () => {
+        throw new Error("unused");
+      },
       getModel: () => "test-model",
     };
 
@@ -409,6 +418,9 @@ describe("processZapiaConversation", () => {
       },
       normalizeWhatsAppConversation: async () => {
         throw new Error("Anthropic no disponible");
+      },
+      analyzeCaseState: async () => {
+        throw new Error("unused");
       },
       getModel: () => "test-model",
     };

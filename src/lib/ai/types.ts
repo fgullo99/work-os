@@ -1,8 +1,11 @@
 import type { ManualCaptureResult } from "./schema";
 import type { EmailThreadResult } from "./emailSchema";
 import type { WhatsAppConversationResult } from "./whatsappSchema";
+import type { CaseStateResult } from "./caseSchema";
 import type { ExistingWorkItemSummary, NormalizedThread } from "@/lib/gmail/types";
 import type { ZapiaConversationUnit } from "@/lib/whatsapp/zapiaSchema";
+import type { CaseHistoryEntry, ExistingCaseSummary } from "@/lib/cases/caseHistoryText";
+import type { InternalTeamMember } from "@/lib/cases/teamMembers";
 
 export interface NormalizeManualCaptureInput {
   /** Texto tal cual lo escribio el usuario. No se modifica antes de mandarlo al modelo. */
@@ -30,6 +33,21 @@ export interface NormalizeWhatsAppConversationInput {
   currentDateISO: string;
 }
 
+/** Input del AI Case Analyzer (ver src/lib/ai/caseSchema.ts, casePrompt.ts) — a diferencia de
+ * los otros 3 normalizers, esto no describe UN mensaje/thread sino la historia COMPLETA de
+ * un Case (item 8 del pedido: nunca analizar eventos aislados). */
+export interface NormalizeCaseStateInput {
+  caseTitle: string;
+  referenceLabel: string | null;
+  /** Orden cronologico no garantizado por el caller — buildCaseHistoryText() los ordena. */
+  entries: CaseHistoryEntry[];
+  internalTeamMembers: InternalTeamMember[];
+  /** Estado ya registrado si el Case ya existia (null si es la primera vez que se analiza). */
+  existing: ExistingCaseSummary | null;
+  /** "Hoy" en America/Argentina/Buenos_Aires, formato YYYY-MM-DD. Nunca UTC. */
+  currentDateISO: string;
+}
+
 /** Tokens de una sola llamada al modelo — para telemetria de costo (ver catchup.ts). Nunca
  * incluye contenido, solo conteos que ya devuelve el proveedor. */
 export interface AiUsage {
@@ -49,6 +67,7 @@ export interface AIProvider {
   normalizeManualCapture(input: NormalizeManualCaptureInput, onUsage?: (usage: AiUsage) => void): Promise<ManualCaptureResult>;
   normalizeEmailThread(input: NormalizeEmailThreadInput, onUsage?: (usage: AiUsage) => void): Promise<EmailThreadResult>;
   normalizeWhatsAppConversation(input: NormalizeWhatsAppConversationInput, onUsage?: (usage: AiUsage) => void): Promise<WhatsAppConversationResult>;
+  analyzeCaseState(input: NormalizeCaseStateInput, onUsage?: (usage: AiUsage) => void): Promise<CaseStateResult>;
   /** Nombre real del modelo configurado — solo para paneles informativos (Settings → AI Engine). */
   getModel(): string;
 }

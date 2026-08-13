@@ -7,11 +7,13 @@ export type {
   NormalizeManualCaptureInput,
   NormalizeEmailThreadInput,
   NormalizeWhatsAppConversationInput,
+  NormalizeCaseStateInput,
 } from "./types";
 export { AINormalizationError } from "./types";
 export type { ManualCaptureResult } from "./schema";
 export type { EmailThreadResult } from "./emailSchema";
 export type { WhatsAppConversationResult } from "./whatsappSchema";
+export type { CaseStateResult } from "./caseSchema";
 
 let cached: AIProvider | null = null;
 
