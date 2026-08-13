@@ -172,11 +172,20 @@ export function GmailCatchupPanel() {
 
   const isRunning = execState === "RUNNING" || execState === "PAUSING";
   const queueLength = state?.thread_queue.length ?? 0;
-  const cursorIndex = state?.cursor_index ?? 0;
   const retrying = state?.failed_threads.length ?? 0;
   const permanentlyFailed = state?.permanently_failed_threads.length ?? 0;
-  const pending = state ? queueLength - cursorIndex + retrying : 0;
-  const processed = state?.processed_count ?? 0;
+  // Misma semantica que processedUniqueOf() en catchup.ts: suma de los 6 buckets de
+  // resultado real — nunca cursor_index ni un contador acumulado que pueda arrastrar drift
+  // (ver incidente real: processed_count llego a estar desalineado de la suma de buckets).
+  const processed = state
+    ? state.auto_created_count +
+      state.auto_updated_count +
+      state.no_op_count +
+      state.review_count +
+      state.ignored_count +
+      state.rule_filtered_count
+    : 0;
+  const pending = state ? queueLength - processed - permanentlyFailed : 0;
   const progressPct = queueLength > 0 ? Math.min(100, Math.round((processed / queueLength) * 1000) / 10) : 0;
 
   const avgThreadMs = lastBatch && lastBatch.threadsProcessed > 0 ? lastBatch.durationMs / lastBatch.threadsProcessed : null;
@@ -311,7 +320,7 @@ export function GmailCatchupPanel() {
 
         {execState === "COMPLETED" && (
           <p className="text-sm text-ink-600">
-            Catch-up completo — {state?.processed_count} threads procesados. El cursor incremental normal ya quedo al dia.
+            Catch-up completo — {processed} threads procesados. El cursor incremental normal ya quedo al dia.
           </p>
         )}
       </div>

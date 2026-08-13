@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeSummary } from "./textNormalize";
 
 /**
  * Salida del Normalizer para threads de Gmail. Comparte filosofia y varios nombres de
@@ -57,7 +58,10 @@ export const emailThreadResultSchema = z.object({
     .max(300)
     .nullable()
     .describe("Cita textual corta de UNO de los mensajes que justifica la interpretacion. Null solo si classification=IGNORE. Nunca inventar."),
-  summary: z.string().min(1).max(200),
+  // Sin .max() a proposito: una desviacion de longitud del modelo aca es metadata secundaria,
+  // no debe rechazar toda la clasificacion. normalizeSummary() la recorta deterministicamente
+  // a 200 despues de validar — ver textNormalize.ts.
+  summary: z.string().min(1).transform(normalizeSummary),
 });
 
 export type EmailThreadResult = z.infer<typeof emailThreadResultSchema>;

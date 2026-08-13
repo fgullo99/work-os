@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeSummary } from "./textNormalize";
 
 /**
  * Forma exacta que debe devolver cualquier AIProvider para captura manual.
@@ -73,7 +74,9 @@ export const manualCaptureResultSchema = z.object({
     .enum(["HIGH", "MEDIUM", "LOW"])
     .describe("Que tan seguro estas de esta interpretacion en su conjunto."),
 
-  summary: z.string().min(1).max(200).describe("Resumen de una linea de que representa este Work Item."),
+  // Sin .max() a proposito — ver nota en emailSchema.ts. normalizeSummary() recorta
+  // deterministicamente en vez de rechazar toda la clasificacion.
+  summary: z.string().min(1).transform(normalizeSummary).describe("Resumen de una linea de que representa este Work Item."),
 });
 
 export type ManualCaptureResult = z.infer<typeof manualCaptureResultSchema>;

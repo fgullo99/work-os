@@ -89,6 +89,23 @@ function emptyUsage(): AiUsageSnapshot {
   return { calls: 0, inputTokens: 0, outputTokens: 0 };
 }
 
+/**
+ * Unica fuente de verdad de "processed unique": la suma de los 6 buckets de resultado real
+ * (auto_created/auto_updated/no_op/review/ignored/rule_filtered) — deliberadamente EXCLUYE
+ * `failed`, que es un contador de EVENTOS de falla (puede incluir intentos que despues se
+ * recuperaron), no de threads sin resolver. Un thread solo entra en uno de estos 6 buckets
+ * la vez que efectivamente termina con un resultado — si fallo antes (una o mas veces) eso
+ * no lo cuenta dos veces aca, y si sigue en failed_threads (retryable, sin resolver todavia)
+ * tampoco esta en ningun bucket, asi que sigue siendo "pending" via la resta en buildResult().
+ *
+ * Se usa TANTO para recalcular threadsProcessed apenas se lee el estado persistido (asi se
+ * autocorrige cualquier drift historico del contador acumulado — ver incidente real:
+ * processed_count llego a estar 2 por encima de la suma real de los buckets, arrastrado
+ * desde el codigo viejo de antes de la cola de reintento) COMO para el calculo de pending. */
+function processedUniqueOf(counts: CatchupCountsSnapshot): number {
+  return counts.autoCreated + counts.autoUpdated + counts.noOp + counts.review + counts.ignored + counts.ruleFiltered;
+}
+
 function bumpCounts(counts: CatchupCountsSnapshot, entry: ThreadSyncLogEntry): void {
   counts.threadsProcessed += 1;
   switch (classifyThreadOutcome(entry)) {
@@ -328,7 +345,7 @@ async function runBatchLocked(
   const batchStartedAt = Date.now();
 
   const totalCounts: CatchupCountsSnapshot = {
-    threadsProcessed: state.processed_count,
+    threadsProcessed: 0, // se recalcula abajo — nunca confiar en el acumulado persistido (ver processedUniqueOf).
     autoCreated: state.auto_created_count,
     autoUpdated: state.auto_updated_count,
     delegated: state.delegated_count,
@@ -339,6 +356,10 @@ async function runBatchLocked(
     ruleFiltered: state.rule_filtered_count,
     failed: state.failed_count,
   };
+  // Autocorrige de entrada cualquier drift historico del contador acumulado — a partir de
+  // aca threadsProcessed se mantiene en sync solo, porque bumpCounts() siempre incrementa
+  // threadsProcessed y exactamente un bucket real a la vez (nunca se desalinean de nuevo).
+  totalCounts.threadsProcessed = processedUniqueOf(totalCounts);
   const totalUsage: AiUsageSnapshot = {
     calls: state.ai_calls_count,
     inputTokens: state.ai_input_tokens,
@@ -365,7 +386,6 @@ async function runBatchLocked(
       Date.now() - batchStartedAt,
       batchEntries,
       state.thread_queue.length,
-      state.cursor_index,
       failedThreads,
       permanentlyFailedThreads
     );
@@ -442,6 +462,10 @@ async function runBatchLocked(
 
   const completed = cursorIndex >= state.thread_queue.length && failedThreads.length === 0;
 
+  // Recalcula una ultima vez antes de persistir — bumpCounts() ya lo mantuvo en sync durante
+  // el lote, esto es solo para blindar contra cualquier drift (ver processedUniqueOf).
+  totalCounts.threadsProcessed = processedUniqueOf(totalCounts);
+
   const { error: updateError } = await supabase
     .from("gmail_catchup_state")
     .update({
@@ -481,7 +505,6 @@ async function runBatchLocked(
     Date.now() - batchStartedAt,
     batchEntries,
     state.thread_queue.length,
-    cursorIndex,
     failedThreads,
     permanentlyFailedThreads
   );
@@ -496,14 +519,18 @@ function buildResult(
   durationMs: number,
   entries: ThreadSyncLogEntry[],
   queueLength: number,
-  cursorIndex: number,
   failedThreads: FailedThreadEntry[],
   permanentlyFailedThreads: FailedThreadEntry[]
 ): CatchupBatchResult {
+  // TOTAL UNIQUE THREADS = processed unique + pending + failed permanente (los 3 se excluyen
+  // mutuamente y suman el total, por construccion — nunca por cursor_index/reintentos, que
+  // es lo que produjo el drift historico). Un thread todavia en failed_threads (retryable,
+  // sin resolver) no esta en processedUniqueOf, asi que cae automaticamente en pending.
+  const pending = queueLength - totalCounts.threadsProcessed - permanentlyFailedThreads.length;
   return {
     status,
     thisBatch: { ...batchCounts, durationMs, aiUsage: batchUsage },
-    total: { ...totalCounts, pending: queueLength - cursorIndex + failedThreads.length, queueLength, aiUsage: totalUsage },
+    total: { ...totalCounts, pending, queueLength, aiUsage: totalUsage },
     entries,
     retryableFailedCount: failedThreads.length,
     permanentlyFailedCount: permanentlyFailedThreads.length,

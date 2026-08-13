@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeSummary } from "./textNormalize";
 
 /**
  * Salida del Normalizer para conversaciones de WhatsApp (via Zapia). Mismo espiritu que
@@ -47,7 +48,9 @@ export const whatsappConversationResultSchema = z.object({
     .max(300)
     .nullable()
     .describe("Cita textual corta de UNO de los mensajes que justifica la interpretacion. Null solo si classification=IGNORE. Nunca inventar."),
-  summary: z.string().min(1).max(200),
+  // Sin .max() a proposito — ver nota en emailSchema.ts. normalizeSummary() recorta
+  // deterministicamente en vez de rechazar toda la clasificacion.
+  summary: z.string().min(1).transform(normalizeSummary),
 });
 
 export type WhatsAppConversationResult = z.infer<typeof whatsappConversationResultSchema>;

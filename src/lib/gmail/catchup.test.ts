@@ -589,3 +589,145 @@ describe("telemetria de costo (AI calls / tokens) — opcional, no afecta el res
     expect(result.thisBatch.aiUsage).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0 });
   });
 });
+
+describe("processed/pending — unica fuente de verdad (suma de buckets de resultado, nunca cursor_index ni un contador acumulado)", () => {
+  it("415 total, 45 unique processed (suma de los 6 buckets) -> pending 370", async () => {
+    gmailRef.current = makeFakeGmail([]);
+    providerRef.current = { normalizeEmailThread: async () => defaultEmailResult({}) } as unknown as AIProvider;
+
+    const threadQueue = Array.from({ length: 415 }, (_, i) => `t-${i}`);
+    const supabase = makeFakeSupabase({
+      gmail_catchup_state: [
+        {
+          connection_id: "conn-1",
+          status: "in_progress",
+          thread_queue: threadQueue,
+          cursor_index: 415, // la cola principal ya se recorrio entera
+          processed_count: 999, // valor deliberadamente "sucio" — nunca deberia usarse tal cual
+          auto_created_count: 10,
+          auto_updated_count: 5,
+          delegated_count: 0,
+          waiting_count: 0,
+          no_op_count: 10,
+          review_count: 10,
+          ignored_count: 5,
+          rule_filtered_count: 5, // 10+5+10+10+5+5 = 45
+          failed_count: 3,
+          failed_threads: [],
+          permanently_failed_threads: [],
+          target_history_id: "h1",
+          worker_locked_at: null,
+          worker_id: null,
+          ai_calls_count: 0,
+          ai_input_tokens: 0,
+          ai_output_tokens: 0,
+          started_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          completed_at: null,
+        },
+      ],
+      google_connection: [connection() as unknown as Row],
+    });
+
+    const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+
+    expect(result.total.queueLength).toBe(415);
+    expect(result.total.threadsProcessed).toBe(45); // recalculado desde los buckets, no el 999 sucio
+    expect(result.total.pending).toBe(370); // 415 - 45 - 0 permanentes
+  });
+
+  it("un thread que falla dos veces y luego tiene exito cuenta processed +1, nunca +3", async () => {
+    const threadIds = ["t-flaky"];
+    gmailRef.current = makeFakeGmail(threadIds);
+    let attempt = 0;
+    providerRef.current = {
+      normalizeEmailThread: async () => {
+        attempt += 1;
+        if (attempt <= 2) throw new Error("falla transitoria");
+        return defaultEmailResult({});
+      },
+    } as unknown as AIProvider;
+
+    const supabase = makeFakeSupabase({ gmail_catchup_state: [], google_connection: [connection() as unknown as Row] });
+
+    const r1 = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 }); // falla 1
+    expect(r1.total.threadsProcessed).toBe(0);
+    const r2 = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 }); // falla 2
+    expect(r2.total.threadsProcessed).toBe(0);
+    const r3 = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 }); // exito
+    expect(r3.status).toBe("completed");
+    expect(r3.total.threadsProcessed).toBe(1); // +1, nunca +3 por los 2 intentos previos
+    expect(r3.total.pending).toBe(0);
+  });
+
+  it("un thread rule-filtered cuenta como processed (+1) sin pasar por la IA", async () => {
+    const threadId = "t-newsletter";
+    gmailRef.current = {
+      users: {
+        threads: {
+          list: async () => ({ data: { threads: [{ id: threadId }], nextPageToken: undefined } }),
+          get: async () => ({
+            data: {
+              id: threadId,
+              historyId: "h1",
+              messages: [
+                {
+                  id: "m1",
+                  internalDate: String(Date.now()),
+                  snippet: "newsletter",
+                  payload: {
+                    headers: [
+                      { name: "From", value: "newsletter@ejemplo.com" },
+                      { name: "To", value: "me@tmc.com" },
+                      { name: "Subject", value: "Newsletter semanal" },
+                      { name: "List-Unsubscribe", value: "<mailto:baja@ejemplo.com>" },
+                    ],
+                    mimeType: "text/plain",
+                    body: { data: Buffer.from("contenido de newsletter", "utf-8").toString("base64url") },
+                  },
+                },
+              ],
+            },
+          }),
+        },
+        getProfile: async () => ({ data: { historyId: "h1" } }),
+      },
+    };
+    let aiCalled = false;
+    providerRef.current = {
+      normalizeEmailThread: async () => {
+        aiCalled = true;
+        return defaultEmailResult({});
+      },
+    } as unknown as AIProvider;
+
+    const supabase = makeFakeSupabase({ gmail_catchup_state: [], google_connection: [connection() as unknown as Row] });
+    const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+
+    expect(aiCalled).toBe(false); // el rule filter corta antes de llegar a la IA
+    expect(result.total.threadsProcessed).toBe(1); // rule-filtered SI cuenta como processed
+    expect(result.total.pending).toBe(0);
+
+    const state = supabase.tables.gmail_catchup_state![0]!;
+    expect(state.rule_filtered_count).toBe(1);
+  });
+
+  it("un thread retryable sin resolver todavia sigue contando como pending, no como processed", async () => {
+    const threadIds = ["t-ok", "t-stuck"];
+    gmailRef.current = makeFakeGmail(threadIds);
+    providerRef.current = {
+      normalizeEmailThread: async ({ thread }: any) => {
+        if (thread.threadId === "t-stuck") throw new Error("sigue fallando");
+        return defaultEmailResult({});
+      },
+    } as unknown as AIProvider;
+
+    const supabase = makeFakeSupabase({ gmail_catchup_state: [], google_connection: [connection() as unknown as Row] });
+    const result = await runCatchupBatch(supabase as any, connection(), { batchSize: 5, timeBudgetMs: 60_000 });
+
+    expect(result.status).toBe("in_progress");
+    expect(result.retryableFailedCount).toBe(1); // t-stuck sigue en la cola de reintento
+    expect(result.total.threadsProcessed).toBe(1); // solo t-ok tiene resultado final
+    expect(result.total.pending).toBe(1); // t-stuck: ni processed ni permanentemente fallido -> pending
+  });
+});
