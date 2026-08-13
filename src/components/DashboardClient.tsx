@@ -18,6 +18,7 @@ import { DelegateModal } from "./DelegateModal";
 import { ReviewCard } from "./ReviewCard";
 import { CaseKanban } from "./CaseKanban";
 import { CaseCard } from "./CaseCard";
+import { CaseAtRiskSection } from "./CaseAtRiskSection";
 import { CaseDetailDrawer } from "./CaseDetailDrawer";
 import { ToastProvider, useToast } from "./Toast";
 import { runOptimisticListAction } from "@/lib/ui/optimisticListAction";
@@ -171,6 +172,13 @@ function DashboardClientInner({
             </div>
           )}
         </section>
+
+        {caseBoard.atRiskCases.length > 0 && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold text-ink-800">EN RIESGO ({caseBoard.atRiskCases.length})</h2>
+            <CaseAtRiskSection cases={caseBoard.atRiskCases} companies={companies} onOpenCase={(id) => setDetailCaseId(id)} />
+          </section>
+        )}
 
         <section>
           <h2 className="mb-3 text-sm font-semibold text-ink-800">CASES</h2>
