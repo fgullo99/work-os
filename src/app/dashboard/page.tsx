@@ -2,6 +2,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getDashboardData, getRecentActivity } from "@/lib/workItems/queries";
 import { listCompanies, listContacts, listContexts } from "@/lib/workItems/entities";
 import { listPendingReviewItems } from "@/lib/workItems/reviewItems";
+import { getCaseBoardData } from "@/lib/cases/board";
 import { todayInTimezone } from "@/lib/dates/timezone";
 import { getActiveConnection } from "@/lib/google/connection";
 import { buildAssistantObservations } from "@/lib/assistant/summary";
@@ -17,17 +18,18 @@ export default async function DashboardPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Today/At Risk/Waiting/Review son el nucleo del Dashboard — si estas fallan, no hay
-  // nada util que mostrar y se deja propagar el error. Gmail status y Recent Activity son
+  // Today/At Risk/Waiting/Review/Case board son el nucleo del Dashboard — si estas fallan, no
+  // hay nada util que mostrar y se deja propagar el error. Gmail status y Recent Activity son
   // secundarios (paneles auxiliares del RightPanel): si fallan, el Dashboard sigue andando
   // sin ellos en vez de tumbar toda la pagina (un solo review_item o source_link con datos
   // raros no debe dejar a Felipe sin poder ver sus tareas de hoy).
-  const [dashboardData, companies, contacts, contexts, reviewItems] = await Promise.all([
+  const [dashboardData, companies, contacts, contexts, reviewItems, caseBoard] = await Promise.all([
     getDashboardData(supabase, todayISO),
     listCompanies(supabase),
     listContacts(supabase),
     listContexts(supabase),
     listPendingReviewItems(supabase),
+    getCaseBoardData(supabase, todayISO),
   ]);
 
   const [connection, recentActivity] = await Promise.all([
@@ -54,6 +56,7 @@ export default async function DashboardPage() {
       contacts={contacts}
       contexts={contexts}
       reviewItems={reviewItems}
+      caseBoard={caseBoard}
       gmailConnected={Boolean(connection)}
       gmailEmail={connection?.email ?? null}
       gmailLastSyncedAt={connection?.last_synced_at ?? null}

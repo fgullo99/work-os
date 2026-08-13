@@ -30,7 +30,9 @@ export type ReviewItemKind =
   | "UPDATE_WORK_ITEM"
   | "POTENTIAL_COMMITMENT"
   | "POSSIBLE_DUPLICATE"
-  | "RECEIVED_CHECK";
+  | "RECEIVED_CHECK"
+  | "CASE_MERGE_REVIEW"
+  | "CASE_STATE_REVIEW";
 export type ReviewItemStatus = "PENDING" | "ACCEPTED" | "APPLIED" | "IGNORED";
 export type ReviewItemFeedback = "CORRECT" | "WRONG" | "NOT_IMPORTANT" | "PERSONAL";
 export type WhatsAppIngestionStatus = "RECEIVED" | "PROCESSED" | "IGNORED" | "ERROR";
@@ -107,6 +109,9 @@ export interface WorkItemRow {
    * nuevo si el thread no cambio. Null = nunca reconciliado. */
   last_reconciled_at: string | null;
   last_reconciled_thread_version: string | null;
+  /** Pivot a Case (Fase 2, ver schema_case_phase2.sql) — nullable, sin poblar todavia
+   * (no hay migracion automatica de Work Items existentes en esta ronda). */
+  case_id: string | null;
 }
 
 export interface NoteRow {
@@ -214,6 +219,9 @@ export interface ReviewItemRow {
   kind: ReviewItemKind;
   status: ReviewItemStatus;
   work_item_id: string | null;
+  /** Pivot a Case (Fase 2) — usado por CASE_MERGE_REVIEW/CASE_STATE_REVIEW. Null para los
+   * 5 kinds originales de Work Item. */
+  case_id: string | null;
   duplicate_candidate_ids: string[] | null;
   proposed_payload: Record<string, unknown>;
   confidence: AiConfidence;
@@ -328,6 +336,38 @@ export interface GmailCatchupStateRow {
   completed_at: string | null;
 }
 
+/** Pivot a Case (Fase 2, ver schema_case_phase2.sql) — mismo shape que GmailCatchupStateRow,
+ * reusa GmailCatchupFailedThread para failed_threads/permanently_failed_threads (identico).
+ * Se siembra LEYENDO gmail_catchup_state, nunca escribiendolo — ver src/lib/cases/caseCatchup.ts. */
+export type CaseCatchupStatus = "in_progress" | "completed" | "failed";
+
+export interface CaseCatchupStateRow {
+  id: string;
+  connection_id: string;
+  status: CaseCatchupStatus;
+  thread_queue: string[];
+  cursor_index: number;
+  processed_count: number;
+  cases_created_count: number;
+  threads_merged_count: number;
+  case_merge_review_count: number;
+  case_state_review_count: number;
+  no_op_count: number;
+  ignored_count: number;
+  rule_filtered_count: number;
+  failed_count: number;
+  failed_threads: GmailCatchupFailedThread[];
+  permanently_failed_threads: GmailCatchupFailedThread[];
+  worker_locked_at: string | null;
+  worker_id: string | null;
+  ai_calls_count: number;
+  ai_input_tokens: number;
+  ai_output_tokens: number;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 // Tipos "Insert" escritos como object literals planos (sin Partial<Row> & {...}).
 // IMPORTANTE: @supabase/supabase-js 2.11x + TypeScript 5.9 resuelven el generic
 // `Schema extends GenericSchema ? Schema : never` de SupabaseClient evaluando
@@ -382,6 +422,7 @@ type WorkItemInsert = {
   last_message_direction?: SourceDirection | null;
   last_reconciled_at?: string | null;
   last_reconciled_thread_version?: string | null;
+  case_id?: string | null;
   is_demo?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -411,6 +452,7 @@ type ReviewItemInsert = {
   kind: ReviewItemKind;
   status?: ReviewItemStatus;
   work_item_id?: string | null;
+  case_id?: string | null;
   duplicate_candidate_ids?: string[] | null;
   proposed_payload: Record<string, unknown>;
   confidence: AiConfidence;
@@ -485,6 +527,32 @@ type GmailCatchupStateInsert = {
   failed_threads?: GmailCatchupFailedThread[];
   permanently_failed_threads?: GmailCatchupFailedThread[];
   target_history_id?: string | null;
+  worker_locked_at?: string | null;
+  worker_id?: string | null;
+  ai_calls_count?: number;
+  ai_input_tokens?: number;
+  ai_output_tokens?: number;
+  started_at?: string;
+  updated_at?: string;
+  completed_at?: string | null;
+};
+type CaseCatchupStateInsert = {
+  id?: string;
+  connection_id: string;
+  status?: CaseCatchupStatus;
+  thread_queue?: string[];
+  cursor_index?: number;
+  processed_count?: number;
+  cases_created_count?: number;
+  threads_merged_count?: number;
+  case_merge_review_count?: number;
+  case_state_review_count?: number;
+  no_op_count?: number;
+  ignored_count?: number;
+  rule_filtered_count?: number;
+  failed_count?: number;
+  failed_threads?: GmailCatchupFailedThread[];
+  permanently_failed_threads?: GmailCatchupFailedThread[];
   worker_locked_at?: string | null;
   worker_id?: string | null;
   ai_calls_count?: number;
@@ -630,6 +698,12 @@ export interface Database {
         Row: CaseSourceLinkRow;
         Insert: CaseSourceLinkInsert;
         Update: Partial<CaseSourceLinkRow>;
+        Relationships: never[];
+      };
+      case_catchup_state: {
+        Row: CaseCatchupStateRow;
+        Insert: CaseCatchupStateInsert;
+        Update: Partial<CaseCatchupStateRow>;
         Relationships: never[];
       };
     };

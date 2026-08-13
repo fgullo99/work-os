@@ -34,6 +34,7 @@ function baseItem(overrides: Partial<WorkItemRow> = {}): WorkItemRow {
     updated_at: TODAY,
     last_reconciled_at: null,
     last_reconciled_thread_version: null,
+    case_id: null,
     ...overrides,
   };
 }

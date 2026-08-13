@@ -42,6 +42,7 @@ function makeWorkItem(overrides: Partial<WorkItemWithRelations> = {}): WorkItemW
     updated_at: "2026-08-01T00:00:00.000Z",
     last_reconciled_at: null,
     last_reconciled_thread_version: null,
+    case_id: null,
     company: null,
     context: null,
     contact: null,

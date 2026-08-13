@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { CompanyRow, ContactRow, ContextRow, ReviewItemRow } from "@/lib/supabase/types";
 import type { DashboardData, RecentActivityRow } from "@/lib/workItems/queries";
+import type { CaseBoardData } from "@/lib/cases/board";
 import { AppShell } from "./AppShell";
 import { RightPanel } from "./RightPanel";
 import { DashboardHeader } from "./DashboardHeader";
@@ -15,6 +16,9 @@ import { WorkItemDetailSheet } from "./WorkItemDetailSheet";
 import { DatePickerModal } from "./DatePickerModal";
 import { DelegateModal } from "./DelegateModal";
 import { ReviewCard } from "./ReviewCard";
+import { CaseKanban } from "./CaseKanban";
+import { CaseCard } from "./CaseCard";
+import { CaseDetailDrawer } from "./CaseDetailDrawer";
 import { ToastProvider, useToast } from "./Toast";
 import { runOptimisticListAction } from "@/lib/ui/optimisticListAction";
 
@@ -26,6 +30,7 @@ interface Props {
   contacts: ContactRow[];
   contexts: ContextRow[];
   reviewItems: ReviewItemRow[];
+  caseBoard: CaseBoardData;
   gmailConnected: boolean;
   gmailEmail: string | null;
   gmailLastSyncedAt: string | null;
@@ -51,6 +56,7 @@ function DashboardClientInner({
   contacts,
   contexts,
   reviewItems,
+  caseBoard,
   gmailConnected,
   gmailEmail,
   gmailLastSyncedAt,
@@ -60,10 +66,12 @@ function DashboardClientInner({
   const toast = useToast();
   const [captureOpen, setCaptureOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
   const [quickPostponeId, setQuickPostponeId] = useState<string | null>(null);
   const [quickDelegateId, setQuickDelegateId] = useState<string | null>(null);
   const [quickExtendId, setQuickExtendId] = useState<string | null>(null);
   const [showAllReview, setShowAllReview] = useState(false);
+  const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
 
   // Espejo local de las 3 listas para poder hacer optimistic update (sacar/actualizar una
   // card al toque, sin esperar al servidor). Se resincroniza con las props cada vez que el
@@ -142,60 +150,32 @@ function DashboardClientInner({
       <DashboardHeader
         userFirstName={userFirstName}
         todayISO={todayISO}
-        counts={{ ...data.counts, review: reviewItems.length }}
+        counts={{
+          today: caseBoard.counts.hoy,
+          atRisk: caseBoard.counts.enRiesgo,
+          waiting: caseBoard.counts.esperando,
+          review: reviewItems.length,
+        }}
       />
 
       <div className="space-y-5">
         <section>
           <h2 className="mb-3 text-sm font-semibold text-ink-800">HOY</h2>
-          {todayItems.length === 0 ? (
+          {caseBoard.hoyCases.length === 0 ? (
             <div className="card p-6 text-center text-sm text-ink-400">No hay nada urgente para hoy.</div>
           ) : (
             <div className="space-y-3">
-              {todayItems.map((item) => (
-                <WorkItemCard
-                  key={item.id}
-                  item={item}
-                  onDone={() => handleDone(item.id)}
-                  onPostpone={() => setQuickPostponeId(item.id)}
-                  onDelegate={() => setQuickDelegateId(item.id)}
-                  onEdit={() => setDetailId(item.id)}
-                />
+              {caseBoard.hoyCases.map((c) => (
+                <CaseCard key={c.id} caseRow={c} companyName={c.company_id ? companyNameById.get(c.company_id) : null} onOpen={() => setDetailCaseId(c.id)} />
               ))}
             </div>
           )}
         </section>
 
-        <Collapsible title="EN RIESGO" count={atRiskItems.length}>
-          {atRiskItems.length === 0 ? (
-            <p className="text-sm text-ink-400">Sin riesgos detectados.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {atRiskItems.map((item) => (
-                <AtRiskRow key={item.id} item={item} onEdit={() => setDetailId(item.id)} />
-              ))}
-            </div>
-          )}
-        </Collapsible>
-
-        <Collapsible title="ESPERANDO" count={waitingForItems.length}>
-          {waitingForItems.length === 0 ? (
-            <p className="text-sm text-ink-400">No estas esperando nada registrado.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {waitingForItems.map((item) => (
-                <WaitingForRow
-                  key={item.id}
-                  item={item}
-                  todayISO={todayISO}
-                  onReceived={() => handleReceived(item.id)}
-                  onExtend={() => setQuickExtendId(item.id)}
-                  onEdit={() => setDetailId(item.id)}
-                />
-              ))}
-            </div>
-          )}
-        </Collapsible>
+        <section>
+          <h2 className="mb-3 text-sm font-semibold text-ink-800">CASES</h2>
+          <CaseKanban kanban={caseBoard.kanban} companies={companies} onOpenCase={(id) => setDetailCaseId(id)} />
+        </section>
 
         <section id="review" className="card p-5">
           <div className="flex items-center justify-between">
@@ -216,7 +196,59 @@ function DashboardClientInner({
             </div>
           )}
         </section>
+
+        <Collapsible title="WORK ITEMS (LEGACY) — EN RIESGO" count={atRiskItems.length}>
+          {atRiskItems.length === 0 ? (
+            <p className="text-sm text-ink-400">Sin riesgos detectados.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {atRiskItems.map((item) => (
+                <AtRiskRow key={item.id} item={item} onEdit={() => setDetailId(item.id)} />
+              ))}
+            </div>
+          )}
+        </Collapsible>
+
+        <Collapsible title="WORK ITEMS (LEGACY) — ESPERANDO" count={waitingForItems.length}>
+          {waitingForItems.length === 0 ? (
+            <p className="text-sm text-ink-400">No estas esperando nada registrado.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {waitingForItems.map((item) => (
+                <WaitingForRow
+                  key={item.id}
+                  item={item}
+                  todayISO={todayISO}
+                  onReceived={() => handleReceived(item.id)}
+                  onExtend={() => setQuickExtendId(item.id)}
+                  onEdit={() => setDetailId(item.id)}
+                />
+              ))}
+            </div>
+          )}
+        </Collapsible>
+
+        <Collapsible title="WORK ITEMS (LEGACY) — HOY" count={todayItems.length}>
+          {todayItems.length === 0 ? (
+            <p className="text-sm text-ink-400">Nada pendiente.</p>
+          ) : (
+            <div className="space-y-3">
+              {todayItems.map((item) => (
+                <WorkItemCard
+                  key={item.id}
+                  item={item}
+                  onDone={() => handleDone(item.id)}
+                  onPostpone={() => setQuickPostponeId(item.id)}
+                  onDelegate={() => setQuickDelegateId(item.id)}
+                  onEdit={() => setDetailId(item.id)}
+                />
+              ))}
+            </div>
+          )}
+        </Collapsible>
       </div>
+
+      <CaseDetailDrawer caseId={detailCaseId} onClose={() => setDetailCaseId(null)} />
 
       <CaptureModal
         open={captureOpen}

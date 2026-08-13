@@ -7,6 +7,8 @@ import type { ReviewProposedPayload } from "@/lib/gmail/types";
 import { Badge } from "./Badge";
 import { SourceBadge } from "./SourceBadge";
 import { useToast } from "./Toast";
+import { CaseMergeReviewCard } from "./CaseMergeReviewCard";
+import { CaseStateReviewCard } from "./CaseStateReviewCard";
 
 const CONFIDENCE_TONE: Record<string, "action" | "waiting" | "neutral"> = {
   HIGH: "action",
@@ -20,9 +22,21 @@ const KIND_LABEL: Record<string, string> = {
   POTENTIAL_COMMITMENT: "Posible compromiso",
   POSSIBLE_DUPLICATE: "Posible duplicado",
   RECEIVED_CHECK: "Actividad nueva",
+  CASE_MERGE_REVIEW: "Posible mismo Case",
+  CASE_STATE_REVIEW: "Case: confirmar estado",
 };
 
+// Los 2 kinds de Case tienen forma de proposed_payload y acciones (endpoints /api/cases/...)
+// distintas de los kinds de Work Item de abajo — se delegan a componentes propios en vez de
+// forzarlos dentro del mismo overrides()/post() pensado para Work Item. El dispatcher en si no
+// llama hooks (para no violar rules-of-hooks con el early-return segun item.kind).
 export function ReviewCard({ item }: { item: ReviewItemRow }) {
+  if (item.kind === "CASE_MERGE_REVIEW") return <CaseMergeReviewCard item={item} />;
+  if (item.kind === "CASE_STATE_REVIEW") return <CaseStateReviewCard item={item} />;
+  return <WorkItemReviewCard item={item} />;
+}
+
+function WorkItemReviewCard({ item }: { item: ReviewItemRow }) {
   const router = useRouter();
   const toast = useToast();
   const payload = item.proposed_payload as unknown as ReviewProposedPayload;

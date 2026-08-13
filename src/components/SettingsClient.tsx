@@ -6,6 +6,7 @@ import type { CompanyRow, ContactRow, ContactTier, ContextRow } from "@/lib/supa
 import { AppShell } from "./AppShell";
 import { GmailConnectPanel } from "./GmailConnectPanel";
 import { GmailCatchupPanel } from "./GmailCatchupPanel";
+import { CaseCatchupPanel } from "./CaseCatchupPanel";
 import { WhatsAppStatusPanel } from "./WhatsAppStatusPanel";
 import { CalendarStatusPanel } from "./CalendarStatusPanel";
 import { AiEnginePanel } from "./AiEnginePanel";
@@ -61,6 +62,7 @@ export function SettingsClient({
           <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-400">Integrations</p>
           <div className="space-y-4">
             <GmailConnectPanel />
+            <CaseCatchupPanel />
             <GmailCatchupPanel />
             <WhatsAppStatusPanel />
             <CalendarStatusPanel />

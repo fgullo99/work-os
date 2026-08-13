@@ -1,6 +1,7 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { searchWorkItems } from "@/lib/workItems/queries";
 import { listCompanies, listContacts, listContexts } from "@/lib/workItems/entities";
+import { searchCases } from "@/lib/cases/search";
 import { todayInTimezone } from "@/lib/dates/timezone";
 import { getActiveConnection } from "@/lib/google/connection";
 import { SearchClient } from "@/components/SearchClient";
@@ -15,8 +16,9 @@ export default async function SearchPage({ searchParams }: { searchParams: { q?:
     data: { user },
   } = await supabase.auth.getUser();
 
-  const [results, companies, contacts, contexts, connection] = await Promise.all([
+  const [results, cases, companies, contacts, contexts, connection] = await Promise.all([
     searchWorkItems(supabase, query),
+    searchCases(supabase, query),
     listCompanies(supabase),
     listContacts(supabase),
     listContexts(supabase),
@@ -30,6 +32,7 @@ export default async function SearchPage({ searchParams }: { searchParams: { q?:
     <SearchClient
       initialQuery={query}
       results={results}
+      cases={cases}
       companies={companies}
       contacts={contacts}
       contexts={contexts}

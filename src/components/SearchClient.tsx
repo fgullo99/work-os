@@ -2,15 +2,18 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import type { CompanyRow, ContactRow, ContextRow } from "@/lib/supabase/types";
+import type { CaseRow, CompanyRow, ContactRow, ContextRow } from "@/lib/supabase/types";
 import type { WorkItemWithRelations } from "@/lib/workItems/types";
 import { formatDateShortEs } from "@/lib/format/date";
 import { AppShell } from "./AppShell";
 import { WorkItemDetailSheet } from "./WorkItemDetailSheet";
+import { CaseCard } from "./CaseCard";
+import { CaseDetailDrawer } from "./CaseDetailDrawer";
 
 interface Props {
   initialQuery: string;
   results: WorkItemWithRelations[];
+  cases: CaseRow[];
   companies: CompanyRow[];
   contacts: ContactRow[];
   contexts: ContextRow[];
@@ -23,6 +26,7 @@ interface Props {
 export function SearchClient({
   initialQuery,
   results,
+  cases,
   companies,
   contacts,
   contexts,
@@ -34,6 +38,8 @@ export function SearchClient({
   const router = useRouter();
   const [query, setQuery] = useState(initialQuery);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
+  const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -55,8 +61,20 @@ export function SearchClient({
         />
       </form>
 
+      {cases.length > 0 && (
+        <div className="mt-5">
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">Cases</h2>
+          <div className="space-y-2">
+            {cases.map((c) => (
+              <CaseCard key={c.id} caseRow={c} companyName={c.company_id ? companyNameById.get(c.company_id) : null} onOpen={() => setDetailCaseId(c.id)} />
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="mt-5 space-y-2">
-        {results.length === 0 && <p className="text-sm text-ink-400">Sin resultados.</p>}
+        {results.length === 0 && cases.length === 0 && <p className="text-sm text-ink-400">Sin resultados.</p>}
+        {results.length > 0 && <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">Work Items (legacy)</h2>}
         {results.map((item) => (
           <button
             key={item.id}
@@ -92,6 +110,8 @@ export function SearchClient({
         contexts={contexts}
         todayISO={todayISO}
       />
+
+      <CaseDetailDrawer caseId={detailCaseId} onClose={() => setDetailCaseId(null)} />
       </div>
     </AppShell>
   );
