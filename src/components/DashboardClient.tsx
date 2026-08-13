@@ -41,6 +41,11 @@ interface Props {
 
 const REVIEW_PREVIEW_COUNT = 5;
 
+/** Los unicos 2 kinds que pertenecen al modelo Case — todo lo demas es Review legacy de Work
+ * Item (NEW_WORK_ITEM/UPDATE_WORK_ITEM/POTENTIAL_COMMITMENT/POSSIBLE_DUPLICATE/RECEIVED_CHECK),
+ * que ya no tiene sentido mostrar en el flujo principal del Dashboard. */
+const CASE_REVIEW_KINDS = new Set(["CASE_MERGE_REVIEW", "CASE_STATE_REVIEW"]);
+
 export function DashboardClient(props: Props) {
   return (
     <ToastProvider>
@@ -130,7 +135,11 @@ function DashboardClientInner({
     postActionOptimistic(id, "received", waitingForItems, setWaitingForItems);
   }
 
-  const visibleReviewItems = showAllReview ? reviewItems : reviewItems.slice(0, REVIEW_PREVIEW_COUNT);
+  // Separa Review de Cases (lo unico que se muestra prominente, item pedido explicitamente)
+  // de Review legacy de Work Item (se demota junto al resto de las secciones legacy).
+  const caseReviewItems = reviewItems.filter((item) => CASE_REVIEW_KINDS.has(item.kind));
+  const workItemReviewItems = reviewItems.filter((item) => !CASE_REVIEW_KINDS.has(item.kind));
+  const visibleReviewItems = showAllReview ? caseReviewItems : caseReviewItems.slice(0, REVIEW_PREVIEW_COUNT);
 
   return (
     <AppShell
@@ -155,7 +164,7 @@ function DashboardClientInner({
           today: caseBoard.counts.hoy,
           atRisk: caseBoard.counts.enRiesgo,
           waiting: caseBoard.counts.esperando,
-          review: reviewItems.length,
+          review: caseReviewItems.length,
         }}
       />
 
@@ -187,14 +196,14 @@ function DashboardClientInner({
 
         <section id="review" className="card p-5">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-ink-800">REVIEW ({reviewItems.length})</h2>
-            {reviewItems.length > REVIEW_PREVIEW_COUNT && (
+            <h2 className="text-sm font-semibold text-ink-800">REVIEW ({caseReviewItems.length})</h2>
+            {caseReviewItems.length > REVIEW_PREVIEW_COUNT && (
               <button type="button" className="btn-ghost" onClick={() => setShowAllReview((v) => !v)}>
-                {showAllReview ? "Ver menos" : `Ver todas (${reviewItems.length})`}
+                {showAllReview ? "Ver menos" : `Ver todas (${caseReviewItems.length})`}
               </button>
             )}
           </div>
-          {reviewItems.length === 0 ? (
+          {caseReviewItems.length === 0 ? (
             <p className="mt-3 text-sm text-ink-400">Todo revisado.</p>
           ) : (
             <div className="mt-3 space-y-3">
@@ -204,6 +213,18 @@ function DashboardClientInner({
             </div>
           )}
         </section>
+
+        <Collapsible title="WORK ITEMS (LEGACY) — REVIEW" count={workItemReviewItems.length}>
+          {workItemReviewItems.length === 0 ? (
+            <p className="text-sm text-ink-400">Nada pendiente.</p>
+          ) : (
+            <div className="space-y-3">
+              {workItemReviewItems.map((item) => (
+                <ReviewCard key={item.id} item={item} />
+              ))}
+            </div>
+          )}
+        </Collapsible>
 
         <Collapsible title="WORK ITEMS (LEGACY) — EN RIESGO" count={atRiskItems.length}>
           {atRiskItems.length === 0 ? (

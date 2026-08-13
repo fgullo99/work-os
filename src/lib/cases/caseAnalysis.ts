@@ -46,16 +46,30 @@ export interface CaseAnalysisDeps {
   onAiUsage?: (usage: AiUsage) => void;
 }
 
-/** Gate puro (mirror de applyAutomationGate en applySync.ts): decide si el resultado del AI
- * Case Analyzer se auto-aplica o requiere CASE_STATE_REVIEW. safeMode/owner UNKNOWN/estado
- * REVIEW propio del modelo/confidence LOW siempre van a Review; CLOSED solo auto-aplica con
- * evidencia inequivoca + confidence HIGH (item 33: nunca "cerrar por las dudas"). */
+/**
+ * Gate puro (mirror de applyAutomationGate en applySync.ts): decide si el resultado del AI
+ * Case Analyzer se auto-aplica o requiere CASE_STATE_REVIEW. Acotado a las 4 categorias
+ * pedidas explicitamente — CASE_STATE_REVIEW nunca deberia significar otra cosa:
+ *   1) owner dudoso — current_owner=UNKNOWN.
+ *   2) posible cierre — CLOSED sin confidence HIGH + evidencia inequivoca (nunca "cerrar por
+ *      las dudas").
+ *   3) estado ambiguo — el propio modelo se marca REVIEW, o confidence=LOW en un estado
+ *      realmente accionable.
+ *   (merge ambiguo es CASE_MERGE_REVIEW, un gate aparte en matchCaseForThread — no pasa por
+ *   esta funcion.)
+ *
+ * A proposito NO manda a Review un NO_ACTION con confidence LOW: es el patron INFO/FYI ya
+ * resuelto (nada pendiente de nadie) — forzar confirmacion manual por una duda menor ahi es
+ * puro ruido, no una ambiguedad real que valga la atencion de Felipe.
+ */
 export function applyCaseStateGate(result: CaseStateResult, safeMode: boolean): "PASS" | "REVIEW" {
   if (safeMode) return "REVIEW";
   if (result.current_owner === "UNKNOWN") return "REVIEW";
+  if (result.current_state === "CLOSED") {
+    return result.confidence === "HIGH" && result.closure_evidence_unambiguous ? "PASS" : "REVIEW";
+  }
   if (result.current_state === "REVIEW") return "REVIEW";
-  if (result.confidence === "LOW") return "REVIEW";
-  if (result.current_state === "CLOSED" && !(result.confidence === "HIGH" && result.closure_evidence_unambiguous)) return "REVIEW";
+  if (result.confidence === "LOW" && result.current_state !== "NO_ACTION") return "REVIEW";
   return "PASS";
 }
 

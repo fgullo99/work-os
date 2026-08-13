@@ -45,12 +45,17 @@ export function CaseStateReviewCard({ item }: { item: ReviewItemRow }) {
   }
 
   const s = payload.proposedState;
+  // Espejo de las 3 sub-razones de applyCaseStateGate (owner UNKNOWN / CLOSED sin evidencia /
+  // confidence LOW o current_state=REVIEW) — mostrado para que Felipe sepa de un vistazo por
+  // que este Case necesita confirmacion manual, no solo que la necesita.
+  const reviewReason =
+    s.current_owner === "UNKNOWN" ? "Owner dudoso" : s.current_state === "CLOSED" ? "Posible cierre" : "Estado ambiguo";
 
   return (
     <div className="card p-4">
       <div className="flex flex-wrap items-center gap-2">
         <SourceBadge source={item.source_type} demo={item.is_demo} />
-        <Badge tone="neutral">Confirmar estado</Badge>
+        <Badge tone="neutral">{reviewReason}</Badge>
         <Badge tone={item.confidence === "HIGH" ? "action" : item.confidence === "MEDIUM" ? "waiting" : "neutral"}>
           {item.confidence}
         </Badge>

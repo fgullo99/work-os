@@ -67,6 +67,18 @@ describe("applyCaseStateGate", () => {
     expect(applyCaseStateGate(HIGH_CONFIDENCE_WAITING, false)).toBe("PASS");
     expect(applyCaseStateGate(stateResult({ confidence: "MEDIUM" }), false)).toBe("PASS");
   });
+
+  it("NO_ACTION con confidence LOW -> PASS (INFO/FYI ya resuelto, evitar ruido en Review)", () => {
+    expect(
+      applyCaseStateGate(stateResult({ current_state: "NO_ACTION", current_owner: "NONE", confidence: "LOW" }), false)
+    ).toBe("PASS");
+  });
+
+  it("NO_ACTION con owner UNKNOWN sigue yendo a REVIEW aunque el estado no sea ambiguo (owner dudoso manda)", () => {
+    expect(
+      applyCaseStateGate(stateResult({ current_state: "NO_ACTION", current_owner: "UNKNOWN", confidence: "LOW" }), false)
+    ).toBe("REVIEW");
+  });
 });
 
 // ---------- fake supabase (mismo patron generalizado que catchup.test.ts, + neq) ----------
