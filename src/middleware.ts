@@ -11,7 +11,7 @@ const PUBLIC_PATH_PREFIXES = ["/login", "/auth"];
 // Nota: por el startsWith de abajo, "/api/capture/whatsapp/status" tambien queda exento del
 // gate de sesion (es prefijo de "/api/capture/whatsapp") — inofensivo, esa ruta solo
 // devuelve un boolean ("esta configurado o no"), nunca datos sensibles.
-const SELF_AUTH_PATHS = ["/api/gmail/sync", "/api/capture/whatsapp", "/api/capture/zapia", "/api/reconcile"];
+const SELF_AUTH_PATHS = ["/api/gmail/sync", "/api/cases/sync", "/api/capture/whatsapp", "/api/capture/zapia", "/api/reconcile"];
 
 export async function middleware(request: NextRequest) {
   const { response, user } = await updateSession(request);

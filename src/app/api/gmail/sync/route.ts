@@ -3,12 +3,18 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { getConnectionOrThrow, runIncrementalSync } from "@/lib/gmail/sync";
 import { runReconciliationSweep, type ReconciliationSummary } from "@/lib/gmail/reconcile";
-import { runIncrementalCaseSync, type CaseSyncSummary } from "@/lib/cases/caseSync";
 
 // Tope maximo permitido por Vercel para este endpoint. El sync procesa threads en
 // serie con una llamada real a Anthropic por thread, asi que puede tardar mas que el
 // limite default de la funcion serverless (10s) — sobre todo la primera vez que hay
 // un backlog grande pendiente de procesar.
+//
+// A PROPOSITO no se encadena el sync incremental de Case aca (ver caseSync.ts): ya se probo
+// y causo FUNCTION_INVOCATION_TIMEOUT (504) en produccion — sumar un tercer paso secuencial
+// (Work Item + reconciliacion + Case, cada uno con su propia llamada real a Anthropic por
+// thread) supera el limite de 60s. El sync de Case vive en su propia ruta
+// (/api/cases/sync) con su propio presupuesto de tiempo y su propio cron, corriendo
+// independiente de este.
 export const maxDuration = 60;
 
 /**
@@ -50,17 +56,7 @@ async function handler(request: Request) {
       console.error("[gmail sync] reconciliation fallo (el sync ya se aplico bien):", err);
     }
 
-    // Sync incremental de Case (item 42), encadenado igual que la reconciliacion — nunca
-    // bloquea la respuesta del sync de Work Item si falla. Cursor propio (case_history_id),
-    // asi que corre independiente sin importar el resultado del sync de arriba.
-    let caseSync: CaseSyncSummary | null = null;
-    try {
-      caseSync = await runIncrementalCaseSync(supabase, connection);
-    } catch (err) {
-      console.error("[gmail sync] case sync fallo (el sync de Work Item ya se aplico bien):", err);
-    }
-
-    return NextResponse.json({ ok: true, summary, reconciliation, caseSync });
+    return NextResponse.json({ ok: true, summary, reconciliation });
   } catch (err) {
     console.error("[gmail sync]", err);
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "sync_failed" }, { status: 500 });
