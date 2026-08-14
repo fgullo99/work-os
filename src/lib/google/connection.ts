@@ -64,6 +64,24 @@ export async function updateSyncCursor(supabase: DB, connectionId: string, histo
   if (error) throw error;
 }
 
+/** Cursor del sync incremental de Case — separado de updateSyncCursor (Work Item) a proposito,
+ * ver nota en schema_case_sync.sql. */
+export async function updateCaseSyncCursor(supabase: DB, connectionId: string, caseHistoryId: string | null): Promise<void> {
+  const { error } = await supabase
+    .from("google_connection")
+    .update({ case_history_id: caseHistoryId, last_case_synced_at: new Date().toISOString() })
+    .eq("id", connectionId);
+  if (error) throw error;
+}
+
+export async function updateLastCaseSyncSummary(supabase: DB, connectionId: string, summary: Record<string, unknown>): Promise<void> {
+  const { error } = await supabase
+    .from("google_connection")
+    .update({ last_case_sync_summary: summary, last_case_synced_at: new Date().toISOString() })
+    .eq("id", connectionId);
+  if (error) throw error;
+}
+
 export async function markBootstrapCompleted(
   supabase: DB,
   connectionId: string,

@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { getConnectionOrThrow, runIncrementalSync } from "@/lib/gmail/sync";
 import { runReconciliationSweep, type ReconciliationSummary } from "@/lib/gmail/reconcile";
+import { runIncrementalCaseSync, type CaseSyncSummary } from "@/lib/cases/caseSync";
 
 // Tope maximo permitido por Vercel para este endpoint. El sync procesa threads en
 // serie con una llamada real a Anthropic por thread, asi que puede tardar mas que el
@@ -49,7 +50,17 @@ async function handler(request: Request) {
       console.error("[gmail sync] reconciliation fallo (el sync ya se aplico bien):", err);
     }
 
-    return NextResponse.json({ ok: true, summary, reconciliation });
+    // Sync incremental de Case (item 42), encadenado igual que la reconciliacion — nunca
+    // bloquea la respuesta del sync de Work Item si falla. Cursor propio (case_history_id),
+    // asi que corre independiente sin importar el resultado del sync de arriba.
+    let caseSync: CaseSyncSummary | null = null;
+    try {
+      caseSync = await runIncrementalCaseSync(supabase, connection);
+    } catch (err) {
+      console.error("[gmail sync] case sync fallo (el sync de Work Item ya se aplico bien):", err);
+    }
+
+    return NextResponse.json({ ok: true, summary, reconciliation, caseSync });
   } catch (err) {
     console.error("[gmail sync]", err);
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "sync_failed" }, { status: 500 });

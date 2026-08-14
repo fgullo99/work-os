@@ -201,6 +201,12 @@ export interface GoogleConnectionRow {
   token_expires_at: string;
   scope: string;
   history_id: string | null;
+  /** Cursor independiente del historyId de Work Item (item 42) — el sync incremental de Case
+   * (caseSync.ts) nunca comparte cursor con el pipeline viejo, cada uno consume su propio
+   * rango de Gmail History API sin pisar al otro. */
+  case_history_id: string | null;
+  last_case_synced_at: string | null;
+  last_case_sync_summary: Record<string, unknown> | null;
   bootstrap_completed_at: string | null;
   bootstrap_range_days: number | null;
   last_synced_at: string | null;
@@ -436,6 +442,9 @@ type GoogleConnectionInsert = {
   token_expires_at: string;
   scope: string;
   history_id?: string | null;
+  case_history_id?: string | null;
+  last_case_synced_at?: string | null;
+  last_case_sync_summary?: Record<string, unknown> | null;
   bootstrap_completed_at?: string | null;
   bootstrap_range_days?: number | null;
   last_synced_at?: string | null;

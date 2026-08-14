@@ -12,7 +12,8 @@ export async function GET(_request: Request, { params }: { params: { id: string 
     return NextResponse.json({ ok: true, case: caseRow, sources });
   } catch (err) {
     console.error("[case get]", err);
-    return NextResponse.json({ ok: false, error: "fetch_failed" }, { status: 500 });
+    const detail = err instanceof Error ? err.message : "unknown_error";
+    return NextResponse.json({ ok: false, error: "fetch_failed", detail }, { status: 500 });
   }
 }
 

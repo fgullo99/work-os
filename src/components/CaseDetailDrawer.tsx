@@ -44,34 +44,38 @@ function gmailUrl(source: CaseSourceLinkRow): string | null {
 export function CaseDetailDrawer({ caseId, onClose, onChanged }: Props) {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [caseRow, setCaseRow] = useState<CaseRow | null>(null);
   const [sources, setSources] = useState<CaseSourceLinkRow[]>([]);
   const [saving, setSaving] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
     if (!caseId) {
       setCaseRow(null);
       setSources([]);
+      setLoadError(null);
       return;
     }
     setLoading(true);
+    setLoadError(null);
     fetch(`/api/cases/${caseId}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.ok) {
-          setCaseRow(data.case);
-          setSources(data.sources ?? []);
-        } else {
-          toast.show("No se pudo cargar el Case.");
+      .then(async (res) => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.ok) {
+          throw new Error(data?.detail ?? data?.error ?? `status ${res.status}`);
         }
+        setCaseRow(data.case);
+        setSources(data.sources ?? []);
       })
       .catch((err) => {
         console.error("[case-detail] fetch fallo:", err);
+        setLoadError(err instanceof Error ? err.message : "unknown_error");
         toast.show("No se pudo cargar el Case.");
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [caseId]);
+  }, [caseId, retryToken]);
 
   async function patch(fields: Partial<Pick<CaseRow, "current_state" | "current_owner">>) {
     if (!caseRow) return;
@@ -111,7 +115,21 @@ export function CaseDetailDrawer({ caseId, onClose, onChanged }: Props) {
         }`}
       >
         <div className="flex-1 overflow-y-auto p-6">
-          {loading || !caseRow ? (
+          {loading ? (
+            <p className="py-10 text-center text-sm text-ink-400">Cargando...</p>
+          ) : loadError ? (
+            <div className="flex flex-col items-center gap-3 py-10 text-center">
+              <p className="text-sm text-ink-500">No se pudo cargar el Case.</p>
+              <div className="flex gap-2">
+                <button type="button" className="btn-secondary" onClick={() => setRetryToken((n) => n + 1)}>
+                  Reintentar
+                </button>
+                <button type="button" className="btn-ghost" onClick={onClose}>
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          ) : !caseRow ? (
             <p className="py-10 text-center text-sm text-ink-400">Cargando...</p>
           ) : (
             <>
