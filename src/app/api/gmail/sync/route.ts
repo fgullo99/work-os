@@ -17,6 +17,17 @@ import { runReconciliationSweep, type ReconciliationSummary } from "@/lib/gmail/
 // independiente de este.
 export const maxDuration = 60;
 
+// Flag reversible (item pedido: "no eliminar codigo, hacerlo reversible con un flag") — el
+// pipeline de Work Item quedo demoted a legacy desde que el Dashboard/Kanban corre sobre
+// Case, y correr los dos duplica el costo de IA analizando el mismo email dos veces (ver
+// cotizacion de costo pedida por Felipe). Default OFF a proposito (sin depender de que
+// alguien configure una env var nueva en Vercel para desactivarlo) — para reactivarlo, seteá
+// WORK_ITEM_GMAIL_SYNC_ENABLED=true en las env vars del proyecto en Vercel. La infraestructura
+// comun de Gmail (OAuth/refresh, cliente, cursor, fetch de threads) no se toca — el pipeline
+// de Case (src/lib/cases/caseSync.ts, ruta /api/cases/sync) la usa de forma completamente
+// independiente y sigue activo sin importar este flag.
+const WORK_ITEM_SYNC_ENABLED = process.env.WORK_ITEM_GMAIL_SYNC_ENABLED === "true";
+
 /**
  * Dual-auth a proposito: esta ruta la puede llamar (a) un cron externo, que no tiene
  * cookies de sesion (autentica con CRON_SECRET), o (b) el boton "Sync now" de Settings,
@@ -36,6 +47,14 @@ async function handler(request: Request) {
     if (!user) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
+  }
+
+  if (!WORK_ITEM_SYNC_ENABLED) {
+    return NextResponse.json({
+      ok: false,
+      error: "Sync legacy de Work Item desactivado — Case (ver Settings > Case Catch-up) es el pipeline activo. Reactivar con WORK_ITEM_GMAIL_SYNC_ENABLED=true.",
+      disabled: true,
+    });
   }
 
   // El sync en si siempre corre con el service client: puede disparerse sin sesion de

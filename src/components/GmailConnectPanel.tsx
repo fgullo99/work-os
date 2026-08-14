@@ -271,6 +271,11 @@ export function GmailConnectPanel() {
           <p className="mt-3 text-xs text-ink-400">
             AI Automation de Gmail se controla desde el panel &quot;AI Automation&quot; mas abajo en Settings.
           </p>
+          <p className="mt-1 rounded-md bg-waiting-100/40 px-2 py-1.5 text-xs text-waiting-600">
+            El pipeline legacy de Work Item esta desactivado (flag <code>WORK_ITEM_GMAIL_SYNC_ENABLED</code>) — Case
+            (Settings &gt; Case Catch-up) es el pipeline activo. La conexion de Gmail sigue igual, esto solo pausa
+            &quot;Sync now&quot; / el cron viejo.
+          </p>
 
           <div className="mt-3 flex flex-wrap gap-2">
             <button type="button" disabled={loading} onClick={handleSyncNow} className="btn-secondary">
