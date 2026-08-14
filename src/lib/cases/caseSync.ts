@@ -81,20 +81,43 @@ async function processThreadIds(supabase: DB, gmail: gmail_v1.Gmail, threadIds: 
   return { threadsProcessed: threadIds.length, casesCreated, threadsMerged, caseMergeReview, caseStateReview, errors, ruleFiltered, aiUsage, log };
 }
 
+function emptySummary(): CaseSyncSummary {
+  return {
+    threadsProcessed: 0,
+    casesCreated: 0,
+    threadsMerged: 0,
+    caseMergeReview: 0,
+    caseStateReview: 0,
+    errors: 0,
+    ruleFiltered: 0,
+    aiUsage: { calls: 0, inputTokens: 0, outputTokens: 0 },
+    log: [],
+  };
+}
+
 /**
  * Sync incremental de Case (item 42 del pedido): mismo patron que runIncrementalSync (Work
  * Item, ver gmail/sync.ts), pero con su propio cursor (case_history_id, nunca comparte
  * history_id con el pipeline viejo — ver schema_case_sync.sql) y llamando
- * processThreadForCase() en vez de processThread(). Corre encadenado despues del sync de
- * Work Item en /api/gmail/sync — misma cuenta de Gmail, dos pipelines independientes leyendo
- * la Gmail History API cada uno a su propio ritmo.
+ * processThreadForCase() en vez de processThread(). Corre en su propia ruta
+ * (/api/cases/sync), su propio cron, encadenado con nada mas.
+ *
+ * A PROPOSITO nunca escanea retroactivamente cuando el cursor esta ausente o vencido — ya se
+ * probo en produccion y una ventana de 2 dias con el volumen real de TMC (15-30+ threads,
+ * cada uno con una llamada real a Anthropic) supera largo los 60s de Vercel, sin importar que
+ * corra sola en su propia ruta. En ese caso, esta funcion SOLO fija el cursor a "ahora" y
+ * arranca a trackear desde ahi — el gap de threads recientes se cierra UNA vez, manualmente,
+ * corriendo bootstrapFallbackCaseSync() localmente (sin el limite de tiempo de Vercel), ver
+ * scripts/run-case-sample.ts para el mismo patron ya usado en el catch-up historico.
  */
 export async function runIncrementalCaseSync(supabase: DB, connection: GoogleConnectionRow): Promise<CaseSyncSummary> {
   const authClient = await getAuthorizedGmailClient(connection);
   const gmail = getGmailApi(authClient);
 
   if (!connection.case_history_id) {
-    return runFallbackShortCaseSync(supabase, connection, gmail);
+    const currentHistoryId = await getCurrentHistoryId(gmail);
+    await updateCaseSyncCursor(supabase, connection.id, currentHistoryId);
+    return emptySummary();
   }
 
   try {
@@ -105,17 +128,24 @@ export async function runIncrementalCaseSync(supabase: DB, connection: GoogleCon
     return summary;
   } catch (err) {
     if (err instanceof HistoryExpiredError) {
-      return runFallbackShortCaseSync(supabase, connection, gmail);
+      const currentHistoryId = await getCurrentHistoryId(gmail);
+      await updateCaseSyncCursor(supabase, connection.id, currentHistoryId);
+      return emptySummary();
     }
     throw err;
   }
 }
 
-/** Cursor ausente o vencido: re-sincroniza una ventana corta (2 dias) — mismo criterio que el
- * fallback de Work Item, nunca reprocesa el backlog historico completo desde aca (para eso
- * esta el catch-up puntual, ver caseCatchup.ts). */
-async function runFallbackShortCaseSync(supabase: DB, connection: GoogleConnectionRow, gmail: gmail_v1.Gmail): Promise<CaseSyncSummary> {
-  const threadIds = await listThreadIdsSinceDays(gmail, 2);
+/**
+ * Bootstrap manual, para correr UNA vez localmente (npx tsx, sin el limite de 60s de Vercel)
+ * despues de activar el sync incremental: cierra la brecha de threads recientes (por default
+ * los ultimos `days` dias) que el cron nunca va a escanear retroactivamente por diseño (ver
+ * runIncrementalCaseSync). Deja el cursor listo para que el cron siga solo desde ahi.
+ */
+export async function bootstrapFallbackCaseSync(supabase: DB, connection: GoogleConnectionRow, days = 2): Promise<CaseSyncSummary> {
+  const authClient = await getAuthorizedGmailClient(connection);
+  const gmail = getGmailApi(authClient);
+  const threadIds = await listThreadIdsSinceDays(gmail, days);
   const summary = await processThreadIds(supabase, gmail, threadIds, connection.safe_mode);
   const currentHistoryId = await getCurrentHistoryId(gmail);
   await updateCaseSyncCursor(supabase, connection.id, currentHistoryId);
